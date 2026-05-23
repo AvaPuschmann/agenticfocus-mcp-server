@@ -212,6 +212,76 @@ Decision Sprint 22+ : production-ize (~4.5j estimé) selon ratio valeur/effort.
 
 ---
 
+## Docker (Story 25-3 — Sprint 24)
+
+The server ships as an OCI image on **GitHub Container Registry** :
+
+```
+ghcr.io/avapuschmann/agenticfocus-mcp-server:0.3.0-jwt
+ghcr.io/avapuschmann/agenticfocus-mcp-server:latest
+```
+
+Image size : 279 MB (Node 22-alpine + production deps). Multi-stage build, runs as non-root user `node`.
+
+### Local build + run
+
+```powershell
+cd "c:\KM\Assets\Claude\01 product\mcp-server"
+
+# Build
+docker build -t agenticfocus-mcp:0.3.0-jwt .
+
+# Run (foreground, see logs)
+docker run --rm -p 3000:3000 `
+  -e SUPABASE_URL="https://YOUR.supabase.co" `
+  -e SUPABASE_ANON_KEY="eyJ..." `
+  -e SUPABASE_JWT_SECRET="your-jwt-secret" `
+  agenticfocus-mcp:0.3.0-jwt
+
+# Health check (from another terminal)
+curl http://localhost:3000/health
+```
+
+### Local via docker compose
+
+Copy `.env.example` → `.env.docker`, fill in real values, then :
+
+```powershell
+docker compose up --build
+docker compose down
+```
+
+### Pull from ghcr.io (no local build)
+
+```bash
+# If package is public — no login needed
+docker pull ghcr.io/avapuschmann/agenticfocus-mcp-server:0.3.0-jwt
+
+# If package is private — login first with a PAT (read:packages scope)
+echo $GITHUB_PAT | docker login ghcr.io -u YOUR_USERNAME --password-stdin
+docker pull ghcr.io/avapuschmann/agenticfocus-mcp-server:0.3.0-jwt
+docker logout ghcr.io
+```
+
+### Healthcheck built-in
+
+The Dockerfile declares :
+
+```
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget -qO- "http://localhost:${PORT:-3000}/health" || exit 1
+```
+
+Docker engine + reverse proxies (Caddy/Traefik) will auto-detect container health and restart if `/health` ever fails.
+
+### Tag conventions
+
+- `latest` — moving target (latest push). Convenient for dev, **avoid in prod**.
+- `0.3.0-jwt` — semver pinned. **Use this in production** (deterministic).
+- (Future) `<git-sha>-short` — for debugging specific commits, set up via CI.
+
+---
+
 ## Sprint 24 Story 25-1 — HTTP transport
 
 **Date** : 2026-05-23

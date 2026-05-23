@@ -7,7 +7,9 @@ dist/
 # Secrets — never commit
 .env
 .env.local
+.env.docker
 .env.*.local
+# .env.example IS committed (template)
 
 # Python port (separate concern, has its own .gitignore if needed)
 python-port/__pycache__/

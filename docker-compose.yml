@@ -1,0 +1,31 @@
+# Local dev compose — Story 25-3 Sprint 24 Epic 25.
+# NOT for production : prod deployment uses `docker run` on the VPS or
+# the orchestrator config alongside Hermes (Story 25-4).
+#
+# Usage :
+#   1. Copy .env.example → .env.docker and fill in real Supabase creds
+#   2. docker compose up --build
+#   3. curl http://localhost:3000/health
+#   4. docker compose down
+
+services:
+  mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: agenticfocus-mcp:0.3.0-jwt
+    container_name: agenticfocus-mcp-dev
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env.docker
+    environment:
+      TRANSPORT: http
+      PORT: "3000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
