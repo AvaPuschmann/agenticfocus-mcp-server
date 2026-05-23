@@ -1,0 +1,39 @@
+{
+  "name": "agenticfocus-mcp-server",
+  "version": "0.1.0-poc",
+  "description": "MCP server exposing AgenticFocus CRUD tools to LLM clients (Claude Desktop, etc.). POC Story 23-6 Sprint 21.",
+  "main": "dist/index.js",
+  "type": "module",
+  "bin": {
+    "agenticfocus-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "dev:stdio": "cross-env TRANSPORT=stdio tsx src/index.ts",
+    "dev:http": "cross-env TRANSPORT=http PORT=3000 tsx src/index.ts",
+    "start": "node dist/index.js",
+    "inspect:stdio": "npx @modelcontextprotocol/inspector node dist/index.js",
+    "inspect:http": "npx @modelcontextprotocol/inspector"
+  },
+  "keywords": [
+    "mcp",
+    "agenticfocus",
+    "claude",
+    "supabase"
+  ],
+  "author": "Philippe Puschmann",
+  "license": "ISC",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@supabase/supabase-js": "^2.105.4",
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.8.0",
+    "cross-env": "^7.0.3",
+    "tsx": "^4.22.0",
+    "typescript": "^6.0.3"
+  }
+}

@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Secrets — never commit
+.env
+.env.local
+.env.*.local
+
+# Python port (separate concern, has its own .gitignore if needed)
+python-port/__pycache__/
+python-port/*.pyc
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Lock file is committed (npm-style)
+# package-lock.json — keep
