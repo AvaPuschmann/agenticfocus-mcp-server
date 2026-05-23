@@ -11,18 +11,37 @@ MCP server exposing AgenticFocus CRUD tools to LLM clients via the Model Context
 
 Set the `TRANSPORT` env var :
 
-| Mode | Use case | How to launch |
+| Mode | Auth | Use case |
 |---|---|---|
-| **`http`** (default) | Remote agents (Hermes Docker VPS, Claude Web), MCP Inspector remote | `TRANSPORT=http PORT=3000 npm run dev` |
-| **`stdio`** | Claude Desktop local (legacy POC) | `TRANSPORT=stdio npm run dev` |
+| **`http`** (default) | **JWT per-request** (multi-user) | Remote agents (Hermes Docker VPS, Claude Web), MCP Inspector remote |
+| **`stdio`** | env vars (single-user legacy) | Claude Desktop local POC |
 
 In HTTP mode the server exposes :
-- `POST /mcp` — JSON-RPC requests (initialize handshake + tool calls)
-- `GET /mcp` — server-sent events stream (server → client notifications)
-- `DELETE /mcp` — explicit session termination
+- `POST /mcp` — JSON-RPC requests (initialize handshake + tool calls), requires `Authorization: Bearer <jwt>`
+- `GET /mcp` — server-sent events stream (server → client notifications), requires same JWT
+- `DELETE /mcp` — explicit session termination, requires same JWT
 - `GET /health` — Docker / reverse proxy health check (no auth, returns service status + active sessions count)
 
-Session management is **stateful** : each client gets a `mcp-session-id` header after the initialize handshake and reuses it for subsequent requests. Sessions are kept in-memory ; restarting the server invalidates them (clients reconnect automatically).
+Session management is **stateful** : each client gets a `mcp-session-id` header after the initialize handshake and reuses it for subsequent requests. Sessions are bound to the user extracted from the JWT (`sub` claim) and cannot be hijacked by a different user (returns 403 if JWT user ≠ session owner). Sessions are kept in-memory ; restarting the server invalidates them.
+
+## Authentication (HTTP mode — Story 25-2)
+
+Every request must include `Authorization: Bearer <jwt>` where `<jwt>` is a Supabase user JWT (typically obtained via `supabase.auth.signInWithPassword()` or refresh flow). The server :
+
+1. Verifies HS256 signature against `SUPABASE_JWT_SECRET` (set at server boot)
+2. Verifies expiration (claim `exp`)
+3. Extracts `sub` claim as the user id
+4. Creates a per-session Supabase client scoped via the user's JWT — RLS policies apply normally, so the user only ever sees their own data
+
+If the JWT is missing, malformed, expired, or signed with the wrong secret → 401 JSON-RPC error.
+
+### Where to get `SUPABASE_JWT_SECRET`
+
+Supabase Studio → Project Settings → API → JWT Secret. This is the HS256 shared secret used by Supabase Auth to sign user JWTs. **Do NOT confuse with the `anon` or `service_role` keys** — those are different.
+
+### Why JWT per-request (Story 25-2 architecture)
+
+The Sprint 21 POC used global env vars `SUPABASE_USER_JWT + USER_ID` (single-user, JWT redeployment every hour at refresh). Production needs multi-user — each Hermes/Claude Web/iOS user passes their own JWT, the server scopes RLS per-user without secret rotation pain.
 
 ---
 
@@ -100,15 +119,14 @@ Restart Claude Desktop. Look for the 🔌 plug icon in the input area — clicki
 
 ## Test via MCP Inspector (no Claude Desktop required)
 
-### HTTP mode (Story 25-1, recommended for V2+)
+### HTTP mode (Story 25-2, JWT per-request multi-user)
 
 In one terminal, start the server :
 
 ```powershell
 $env:SUPABASE_URL="https://YOUR.supabase.co"
 $env:SUPABASE_ANON_KEY="eyJ..."
-$env:SUPABASE_USER_JWT="eyJ..."
-$env:USER_ID="d9dd9a28-ec9c-4a67-9253-f673021c1611"
+$env:SUPABASE_JWT_SECRET="your-jwt-secret-from-supabase-studio"
 $env:TRANSPORT="http"
 $env:PORT="3000"
 npm run dev
@@ -118,10 +136,24 @@ Sanity check it's alive :
 
 ```powershell
 curl http://localhost:3000/health
-# → {"status":"ok","service":"agenticfocus-mcp","transport":"http","version":"0.2.0-http","sessions":0}
+# → {"status":"ok","service":"agenticfocus-mcp","transport":"http","version":"0.3.0-jwt","sessions":0}
 ```
 
-In another terminal, launch MCP Inspector and set the URL to `http://localhost:3000/mcp` :
+Get a user JWT (from Supabase Studio Auth → Sessions, or from the desktop/mobile app's localStorage `supabase.auth.token`).
+
+Test with curl :
+
+```powershell
+$JWT="eyJhbGc..."  # your user JWT
+curl -X POST http://localhost:3000/mcp `
+  -H "Content-Type: application/json" `
+  -H "Accept: application/json, text/event-stream" `
+  -H "Authorization: Bearer $JWT" `
+  -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"curl","version":"0.0.1"}},"id":1}'
+# Response : 200 OK + mcp-session-id header
+```
+
+In another terminal, launch MCP Inspector :
 
 ```bash
 npx @modelcontextprotocol/inspector
@@ -130,8 +162,9 @@ npx @modelcontextprotocol/inspector
 Then in the Inspector UI :
 1. Transport : `Streamable HTTP`
 2. URL : `http://localhost:3000/mcp`
-3. Click `Connect` → should show the 3 tools
-4. Click `list_today_tasks` → JSON response
+3. **Authentication** : paste your JWT in the `Authorization` field with value `Bearer <jwt>` (or use the Auth tab)
+4. Click `Connect` → should show the 3 tools
+5. Click `list_today_tasks` → JSON response with your tasks for today
 
 ### Stdio mode (POC legacy)
 

@@ -1,19 +1,21 @@
 #!/usr/bin/env node
 /**
- * AgenticFocus MCP Server — Story 25-1 Sprint 24 Epic 25
+ * AgenticFocus MCP Server — Story 25-2 Sprint 24 Epic 25
  *
- * Exposes CRUD tools to LLM clients (Claude Desktop, Hermes, Claude Web, MCP Inspector)
- * over two transports :
- *   - stdio (POC original Story 23-7 Sprint 21, kept for Claude Desktop local use)
- *   - StreamableHTTPServerTransport (NEW — Story 25-1, requirement for remote agents)
+ * Multi-user MCP server : auth via Authorization: Bearer <jwt> header on
+ * every HTTP request. Each session is bound to the user extracted from the
+ * JWT (sub claim), with its own Supabase client scoped via that JWT for
+ * RLS enforcement.
+ *
+ * Transports :
+ *   - stdio (POC original Story 23-7, kept for Claude Desktop local — single user
+ *     auth via env vars SUPABASE_USER_JWT + USER_ID, legacy mode)
+ *   - StreamableHTTPServerTransport (production : JWT per-request, multi-user)
  *
  * Tools (unchanged from Sprint 21 POC) :
  *   - create_day_task   : create a task scheduled for a specific day
  *   - list_today_tasks  : list tasks for today
  *   - list_projects     : list active Kanban projects
- *
- * Auth (V1) : global env vars SUPABASE_USER_JWT + USER_ID (single-user). Story 25-2
- * will migrate this to per-request JWT extraction from Authorization header.
  *
  * Selection via env var TRANSPORT=stdio|http (default: http).
  */
@@ -29,32 +31,40 @@ import {
   isInitializeRequest,
 } from "@modelcontextprotocol/sdk/types.js";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import { verifyJwtMiddleware } from "./auth.js";
 
 // ─── Env config ───────────────────────────────────────────────────────────────
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
-const SUPABASE_USER_JWT = process.env.SUPABASE_USER_JWT;
-const USER_ID = process.env.USER_ID;
+const SUPABASE_JWT_SECRET = process.env.SUPABASE_JWT_SECRET;
 const TRANSPORT = (process.env.TRANSPORT ?? "http").toLowerCase();
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
-if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !SUPABASE_USER_JWT || !USER_ID) {
+// Legacy stdio mode env vars (single-user) — used only when TRANSPORT=stdio.
+const STDIO_USER_JWT = process.env.SUPABASE_USER_JWT;
+const STDIO_USER_ID = process.env.USER_ID;
+
+if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
   console.error(
-    "[agenticfocus-mcp] Missing required env vars. Need: SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_USER_JWT, USER_ID",
+    "[agenticfocus-mcp] Missing required env vars. Need: SUPABASE_URL, SUPABASE_ANON_KEY",
   );
   process.exit(1);
 }
 
-// Supabase client authenticated as the user (RLS applies normally).
-// Story 25-2 will rework this into a per-request client using header JWT.
-const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-  global: {
-    headers: {
-      Authorization: `Bearer ${SUPABASE_USER_JWT}`,
-    },
-  },
-});
+if (TRANSPORT === "http" && !SUPABASE_JWT_SECRET) {
+  console.error(
+    "[agenticfocus-mcp] HTTP transport requires SUPABASE_JWT_SECRET env var (Supabase Studio → Settings → API → JWT Secret)",
+  );
+  process.exit(1);
+}
+
+if (TRANSPORT === "stdio" && (!STDIO_USER_JWT || !STDIO_USER_ID)) {
+  console.error(
+    "[agenticfocus-mcp] stdio transport requires SUPABASE_USER_JWT + USER_ID env vars (legacy single-user mode)",
+  );
+  process.exit(1);
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -67,7 +77,21 @@ function nowMs(): number {
   return Date.now();
 }
 
-// ─── Tool implementations ─────────────────────────────────────────────────────
+/**
+ * Create a Supabase client scoped to a specific user via their JWT.
+ * RLS policies apply normally — the user sees only their own data.
+ */
+function makeSupabaseClient(userJwt: string): SupabaseClient {
+  return createClient(SUPABASE_URL!, SUPABASE_ANON_KEY!, {
+    global: {
+      headers: {
+        Authorization: `Bearer ${userJwt}`,
+      },
+    },
+  });
+}
+
+// ─── Tool implementations (parametrized by userId + supabase) ─────────────────
 
 interface CreateDayTaskArgs {
   name: string;
@@ -78,20 +102,20 @@ interface CreateDayTaskArgs {
   note?: string;
 }
 
-async function toolCreateDayTask(args: CreateDayTaskArgs): Promise<string> {
+async function toolCreateDayTask(
+  args: CreateDayTaskArgs,
+  ctx: { userId: string; supabase: SupabaseClient },
+): Promise<string> {
   const name = args.name?.trim();
   if (!name) throw new Error("name is required and must be non-empty");
 
   const date = args.date || todayIsoDate();
-  const plannedPomos = Math.max(
-    1,
-    Math.min(99, args.planned_pomodoros ?? 1),
-  );
+  const plannedPomos = Math.max(1, Math.min(99, args.planned_pomodoros ?? 1));
   const now = nowMs();
 
   const row = {
     id: randomUUID(),
-    user_id: USER_ID,
+    user_id: ctx.userId,
     name,
     date,
     planned_pomodoros: plannedPomos,
@@ -105,7 +129,7 @@ async function toolCreateDayTask(args: CreateDayTaskArgs): Promise<string> {
     updated_at: now,
   };
 
-  const { error } = await supabase.from("day_tasks").insert(row);
+  const { error } = await ctx.supabase.from("day_tasks").insert(row);
   if (error) {
     throw new Error(`Supabase insert failed: ${error.message} (${error.code})`);
   }
@@ -129,14 +153,17 @@ interface ListTodayTasksArgs {
   include_completed?: boolean;
 }
 
-async function toolListTodayTasks(args: ListTodayTasksArgs): Promise<string> {
+async function toolListTodayTasks(
+  args: ListTodayTasksArgs,
+  ctx: { userId: string; supabase: SupabaseClient },
+): Promise<string> {
   const today = todayIsoDate();
   const includeCompleted = args.include_completed ?? true;
 
-  let query = supabase
+  let query = ctx.supabase
     .from("day_tasks")
     .select("id, name, planned_pomodoros, completed_pomodoros, is_completed, project_id, note")
-    .eq("user_id", USER_ID)
+    .eq("user_id", ctx.userId)
     .eq("date", today);
 
   if (!includeCompleted) query = query.eq("is_completed", false);
@@ -144,11 +171,10 @@ async function toolListTodayTasks(args: ListTodayTasksArgs): Promise<string> {
   const { data, error } = await query;
   if (error) throw new Error(`Supabase select failed: ${error.message}`);
 
-  // Enrich with project name if project_id
   const projectIds = Array.from(new Set((data || []).map((t) => t.project_id).filter(Boolean)));
   let projectsMap = new Map<string, string>();
   if (projectIds.length > 0) {
-    const { data: projects } = await supabase
+    const { data: projects } = await ctx.supabase
       .from("projects")
       .select("id, name")
       .in("id", projectIds as string[]);
@@ -160,15 +186,7 @@ async function toolListTodayTasks(args: ListTodayTasksArgs): Promise<string> {
     project_name: t.project_id ? projectsMap.get(t.project_id) ?? null : null,
   }));
 
-  return JSON.stringify(
-    {
-      date: today,
-      count: enriched.length,
-      tasks: enriched,
-    },
-    null,
-    2,
-  );
+  return JSON.stringify({ date: today, count: enriched.length, tasks: enriched }, null, 2);
 }
 
 interface ListProjectsArgs {
@@ -176,11 +194,14 @@ interface ListProjectsArgs {
   kanban_status?: "backlog" | "todo" | "doing" | "done";
 }
 
-async function toolListProjects(args: ListProjectsArgs): Promise<string> {
-  let query = supabase
+async function toolListProjects(
+  args: ListProjectsArgs,
+  ctx: { userId: string; supabase: SupabaseClient },
+): Promise<string> {
+  let query = ctx.supabase
     .from("projects")
     .select("id, name, description, kanban_status, kanban_position, target_date, domain_id, is_archived, started_at, finished_at")
-    .eq("user_id", USER_ID)
+    .eq("user_id", ctx.userId)
     .order("kanban_status")
     .order("kanban_position");
 
@@ -190,25 +211,19 @@ async function toolListProjects(args: ListProjectsArgs): Promise<string> {
   const { data, error } = await query;
   if (error) throw new Error(`Supabase select failed: ${error.message}`);
 
-  return JSON.stringify(
-    {
-      count: (data || []).length,
-      projects: data,
-    },
-    null,
-    2,
-  );
+  return JSON.stringify({ count: (data || []).length, projects: data }, null, 2);
 }
 
-// ─── MCP server factory ───────────────────────────────────────────────────────
-// Extracted so both stdio and http transports can spin up a fresh Server instance.
-// Spec recommends 1 Server per session for stateful HTTP transport.
+// ─── MCP server factory (per-user) ────────────────────────────────────────────
+// One Server instance per session, bound to the specific user extracted from the JWT.
 
-function createMcpServer(): Server {
+function createMcpServer(userId: string, userJwt: string): Server {
+  const supabase = makeSupabaseClient(userJwt);
+
   const server = new Server(
     {
       name: "agenticfocus-mcp-server",
-      version: "0.2.0-http",
+      version: "0.3.0-jwt",
     },
     {
       capabilities: {
@@ -239,14 +254,8 @@ function createMcpServer(): Server {
               default: 1,
               description: "Number of 25-min pomodoro sessions planned (default 1)",
             },
-            project_id: {
-              type: "string",
-              description: "Optional UUID to link the task to a project (see list_projects)",
-            },
-            domain_id: {
-              type: "string",
-              description: "Optional UUID for a life domain (Sport, Pro, etc.)",
-            },
+            project_id: { type: "string", description: "Optional UUID to link the task to a project (see list_projects)" },
+            domain_id: { type: "string", description: "Optional UUID for a life domain (Sport, Pro, etc.)" },
             note: { type: "string", description: "Optional free-text note" },
           },
           required: ["name"],
@@ -292,25 +301,24 @@ function createMcpServer(): Server {
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
+    const ctx = { userId, supabase };
 
     try {
       let result: string;
       switch (name) {
         case "create_day_task":
-          result = await toolCreateDayTask(args as unknown as CreateDayTaskArgs);
+          result = await toolCreateDayTask(args as unknown as CreateDayTaskArgs, ctx);
           break;
         case "list_today_tasks":
-          result = await toolListTodayTasks(args as unknown as ListTodayTasksArgs);
+          result = await toolListTodayTasks(args as unknown as ListTodayTasksArgs, ctx);
           break;
         case "list_projects":
-          result = await toolListProjects(args as unknown as ListProjectsArgs);
+          result = await toolListProjects(args as unknown as ListProjectsArgs, ctx);
           break;
         default:
           throw new Error(`Unknown tool: ${name}`);
       }
-      return {
-        content: [{ type: "text", text: result }],
-      };
+      return { content: [{ type: "text", text: result }] };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return {
@@ -323,72 +331,83 @@ function createMcpServer(): Server {
   return server;
 }
 
-// ─── Stdio transport boot ─────────────────────────────────────────────────────
+// ─── Stdio transport boot (legacy single-user) ────────────────────────────────
 
 async function runStdio(): Promise<void> {
   const transport = new StdioServerTransport();
-  const server = createMcpServer();
+  // stdio mode uses the legacy env vars — single-user.
+  const server = createMcpServer(STDIO_USER_ID!, STDIO_USER_JWT!);
   await server.connect(transport);
-  console.error("[agenticfocus-mcp] Server running on stdio. Ready to serve.");
+  console.error("[agenticfocus-mcp] stdio transport running (single-user via env vars). Ready to serve.");
 }
 
-// ─── HTTP transport boot ──────────────────────────────────────────────────────
+// ─── HTTP transport boot (multi-user via JWT per-request) ─────────────────────
 
 async function runHttp(port: number): Promise<void> {
   const app = express();
   app.use(express.json());
 
   // Session-keyed transport map (stateful mode).
-  // Each MCP client opens a session via POST /mcp initialize → server returns mcp-session-id,
-  // client passes that header on subsequent requests.
-  const transports: Record<string, StreamableHTTPServerTransport> = {};
+  // Each session is bound to a specific (userId, userJwt) extracted from the JWT
+  // at the initialize handshake. Subsequent requests on the same session re-use it.
+  const transports: Record<string, { transport: StreamableHTTPServerTransport; userId: string }> = {};
 
-  // Health check route (useful for Docker healthcheck + reverse proxy ping — Stories 25-3/25-4)
+  // Health check — no auth, no body. Useful for Docker healthcheck + reverse proxy ping.
   app.get("/health", (_req, res) => {
     res.json({
       status: "ok",
       service: "agenticfocus-mcp",
       transport: "http",
-      version: "0.2.0-http",
+      version: "0.3.0-jwt",
       sessions: Object.keys(transports).length,
     });
   });
 
-  // POST /mcp — JSON-RPC client→server (including initialize handshake)
-  app.post("/mcp", async (req: Request, res: Response) => {
+  // JWT verification middleware applied to all /mcp routes.
+  const jwtMiddleware = verifyJwtMiddleware(SUPABASE_JWT_SECRET!);
+
+  // POST /mcp — JSON-RPC client→server (initialize + tool calls)
+  app.post("/mcp", jwtMiddleware, async (req: Request, res: Response) => {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
+    const userId = req.userId!;
+    const userJwt = req.userJwt!;
+
     let transport: StreamableHTTPServerTransport;
 
     if (sessionId && transports[sessionId]) {
-      // Existing session — reuse its transport
-      transport = transports[sessionId];
+      // Existing session — verify the JWT user matches the session owner.
+      if (transports[sessionId].userId !== userId) {
+        res.status(403).json({
+          jsonrpc: "2.0",
+          error: { code: -32002, message: "JWT user does not match session owner" },
+          id: null,
+        });
+        return;
+      }
+      transport = transports[sessionId].transport;
     } else if (!sessionId && isInitializeRequest(req.body)) {
-      // New session — create transport + bind to a fresh Server instance
+      // New session — bind to (userId, userJwt) extracted from JWT.
       transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
       });
       transport.onclose = () => {
         if (transport.sessionId) {
           delete transports[transport.sessionId];
-          console.error(`[agenticfocus-mcp] session closed: ${transport.sessionId}`);
+          console.error(`[agenticfocus-mcp] session closed: ${transport.sessionId} (user ${userId})`);
         }
       };
-      const server = createMcpServer();
+      const server = createMcpServer(userId, userJwt);
       await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
       if (transport.sessionId) {
-        transports[transport.sessionId] = transport;
-        console.error(`[agenticfocus-mcp] session opened: ${transport.sessionId}`);
+        transports[transport.sessionId] = { transport, userId };
+        console.error(`[agenticfocus-mcp] session opened: ${transport.sessionId} (user ${userId})`);
       }
       return;
     } else {
-      // No session id AND not an initialize request → reject
       res.status(400).json({
         jsonrpc: "2.0",
-        error: {
-          code: -32000,
-          message: "Bad Request: missing mcp-session-id header for non-initialize request",
-        },
+        error: { code: -32000, message: "Bad Request: missing mcp-session-id header for non-initialize request" },
         id: null,
       });
       return;
@@ -397,28 +416,36 @@ async function runHttp(port: number): Promise<void> {
     await transport.handleRequest(req, res, req.body);
   });
 
-  // GET /mcp — server→client SSE stream (server-initiated notifications)
-  app.get("/mcp", async (req: Request, res: Response) => {
+  // GET /mcp — SSE stream (server→client)
+  app.get("/mcp", jwtMiddleware, async (req: Request, res: Response) => {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
     if (!sessionId || !transports[sessionId]) {
       res.status(400).send("Invalid or missing mcp-session-id header");
       return;
     }
-    await transports[sessionId].handleRequest(req, res);
+    if (transports[sessionId].userId !== req.userId) {
+      res.status(403).send("JWT user does not match session owner");
+      return;
+    }
+    await transports[sessionId].transport.handleRequest(req, res);
   });
 
   // DELETE /mcp — explicit session termination
-  app.delete("/mcp", async (req: Request, res: Response) => {
+  app.delete("/mcp", jwtMiddleware, async (req: Request, res: Response) => {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
     if (!sessionId || !transports[sessionId]) {
       res.status(400).send("Invalid or missing mcp-session-id header");
       return;
     }
-    await transports[sessionId].handleRequest(req, res);
+    if (transports[sessionId].userId !== req.userId) {
+      res.status(403).send("JWT user does not match session owner");
+      return;
+    }
+    await transports[sessionId].transport.handleRequest(req, res);
   });
 
   app.listen(port, () => {
-    console.error(`[agenticfocus-mcp] HTTP transport listening on :${port}/mcp`);
+    console.error(`[agenticfocus-mcp] HTTP transport listening on :${port}/mcp (multi-user, JWT-authenticated)`);
     console.error(`[agenticfocus-mcp] Health check: http://localhost:${port}/health`);
   });
 }

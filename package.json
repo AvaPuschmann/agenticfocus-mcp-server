@@ -13,6 +13,8 @@
     "dev:stdio": "cross-env TRANSPORT=stdio tsx src/index.ts",
     "dev:http": "cross-env TRANSPORT=http PORT=3000 tsx src/index.ts",
     "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "inspect:stdio": "npx @modelcontextprotocol/inspector node dist/index.js",
     "inspect:http": "npx @modelcontextprotocol/inspector"
   },
@@ -27,13 +29,15 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@supabase/supabase-js": "^2.105.4",
-    "express": "^5.2.1"
+    "express": "^5.2.1",
+    "jose": "^6.2.3"
   },
   "devDependencies": {
     "@types/express": "^5.0.6",
     "@types/node": "^25.8.0",
     "cross-env": "^7.0.3",
     "tsx": "^4.22.0",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.7"
   }
 }
