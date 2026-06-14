@@ -223,7 +223,7 @@ function createMcpServer(userId: string, userJwt: string): Server {
   const server = new Server(
     {
       name: "agenticfocus-mcp-server",
-      version: "0.3.0-jwt",
+      version: "0.4.0-jwks",
     },
     {
       capabilities: {
@@ -358,13 +358,15 @@ async function runHttp(port: number): Promise<void> {
       status: "ok",
       service: "agenticfocus-mcp",
       transport: "http",
-      version: "0.3.0-jwt",
+      version: "0.4.0-jwks",
       sessions: Object.keys(transports).length,
     });
   });
 
   // JWT verification middleware applied to all /mcp routes.
-  const jwtMiddleware = verifyJwtMiddleware(SUPABASE_JWT_SECRET!);
+  // Passe SUPABASE_URL pour permettre la vérification JWKS des tokens ES256/RS256
+  // (nouvelles JWT Signing Keys Supabase), avec repli HS256 via le secret.
+  const jwtMiddleware = verifyJwtMiddleware(SUPABASE_JWT_SECRET!, SUPABASE_URL);
 
   // POST /mcp — JSON-RPC client→server (initialize + tool calls)
   app.post("/mcp", jwtMiddleware, async (req: Request, res: Response) => {

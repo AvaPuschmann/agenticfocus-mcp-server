@@ -1,0 +1,45 @@
+# AgenticFocus MCP — déploiement PRODUCTION sur le VPS Hostinger (Story 25-4).
+#
+# Traefik (host network, provider docker, exposedbydefault=false) route
+# mcp.agenticfocus.app → ce conteneur en INTERNE. On ne publie AUCUN port
+# (le 3000 hôte est déjà pris par Hermes). Aucun impact sur Hermes.
+#
+# Pré-requis :
+#   - DNS A : mcp.agenticfocus.app → 109.176.198.7 (propagé)
+#   - .env rempli (à côté de ce fichier) avec les creds Supabase
+#   - image ghcr accessible (package public OU docker login ghcr.io)
+#
+# Déploiement :
+#   docker compose -f docker-compose.prod.yml pull
+#   docker compose -f docker-compose.prod.yml up -d
+#   docker compose -f docker-compose.prod.yml logs -f mcp   # voir le démarrage
+
+services:
+  mcp:
+    image: ghcr.io/avapuschmann/agenticfocus-mcp-server:0.3.0-jwt
+    container_name: agenticfocus-mcp
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      TRANSPORT: http
+      PORT: "3000"
+    networks:
+      - mcpnet
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=mcpnet"
+      - "traefik.http.routers.mcp.rule=Host(`mcp.agenticfocus.app`)"
+      - "traefik.http.routers.mcp.entrypoints=websecure"
+      - "traefik.http.routers.mcp.tls.certresolver=letsencrypt"
+      - "traefik.http.services.mcp.loadbalancer.server.port=3000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  mcpnet:
+    name: mcpnet
