@@ -38,7 +38,9 @@ async function login() {
 }
 
 const PORT = 3099;
-const BASE = `http://127.0.0.1:${PORT}`;
+// MCP_BASE_URL=https://…  : teste un serveur déjà déployé (aucun serveur local lancé).
+const EXTERNAL = (process.env.MCP_BASE_URL || "").replace(/\/$/, "");
+const BASE = EXTERNAL || `http://127.0.0.1:${PORT}`;
 const first = await login();
 await new Promise((r) => setTimeout(r, 1100)); // jetons émis à des secondes différentes
 const second = await login();
@@ -49,12 +51,12 @@ check(first.token !== second.token, "deux jetons valides distincts pour le même
 const cleanup = async () => { await sb.from("day_tasks").delete().eq("user_id", userId); };
 await cleanup();
 
-const server = spawn(process.execPath, ["dist/index.js"], {
+const server = EXTERNAL ? null : spawn(process.execPath, ["dist/index.js"], {
   env: { ...process.env, TRANSPORT: "http", PORT: String(PORT), SUPABASE_URL: SB_URL, SUPABASE_ANON_KEY: SB_KEY, SUPABASE_JWT_SECRET: "inutile-pour-les-jetons-asymetriques" },
   stdio: ["ignore", "ignore", "pipe"],
 });
 let serverLog = "";
-server.stderr.on("data", (d) => { serverLog += d; });
+server?.stderr.on("data", (d) => { serverLog += d; });
 for (let i = 0; i < 40; i++) {
   try { if ((await fetch(BASE + "/health")).ok) break; } catch { /* démarrage */ }
   await new Promise((r) => setTimeout(r, 250));
@@ -154,12 +156,12 @@ try {
 } catch (e) {
   ko("parcours interrompu : " + String(e.message).split("\n")[0]);
 } finally {
-  server.kill();
+  server?.kill();
   await cleanup();
   const left = (await sb.from("day_tasks").select("id").eq("user_id", userId)).data?.length ?? -1;
   check(left === 0, "nettoyage : données de test supprimées", `nettoyage incomplet : ${left}`);
   const errors = serverLog.split("\n").filter((l) => /failed|error/i.test(l) && !/session/.test(l));
-  check(errors.length === 0, "aucune erreur dans les journaux du serveur", "journaux : " + errors.slice(0, 2).join(" | "));
+  check(EXTERNAL || errors.length === 0, "aucune erreur dans les journaux du serveur (serveur local seulement)", "journaux : " + errors.slice(0, 2).join(" | "));
   await sb.auth.signOut();
 }
 
