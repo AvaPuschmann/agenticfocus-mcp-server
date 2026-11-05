@@ -1,296 +1,96 @@
 # AgenticFocus MCP Server
 
-**Story 23-7 / Sprint 21 (POC stdio)** → **Story 25-1 / Sprint 24 (production HTTP transport)**.
-MCP server exposing AgenticFocus CRUD tools to LLM clients via the Model Context Protocol — supports both **stdio** (Claude Desktop local) and **StreamableHTTPServerTransport** (Hermes Docker VPS, Claude Web, remote agents).
+Serveur MCP (Model Context Protocol) qui permet à un agent (Claude, Hermes…) de **lire et d'ajouter des tâches** dans AgenticFocus, avec les droits de l'utilisateur. Version **0.5.0** (Epics 25 et 27).
 
-> Reference investigation : [`_bmad-output/research/mcp-investigation.md`](../_bmad-output/research/mcp-investigation.md)
+- **Transport HTTP** (production, multi-utilisateur) : `POST/GET/DELETE /mcp`, `GET /health`.
+- **Transport stdio** (Claude Desktop en local, un seul utilisateur, hérité du POC).
 
----
+## Principe
 
-## Transports — choose your mode
+```
+Agent ──Bearer <jeton Supabase de l'utilisateur>──►  MCP  ──même jeton──►  Supabase (RLS)
+```
 
-Set the `TRANSPORT` env var :
+L'agent s'authentifie **comme l'utilisateur** (sa session Supabase). Le serveur vérifie le jeton, puis parle à Supabase avec ce jeton : les règles d'accès (RLS) s'appliquent, l'agent ne voit que les données de l'utilisateur. La clé `service_role` n'est **jamais** utilisée.
 
-| Mode | Auth | Use case |
-|---|---|---|
-| **`http`** (default) | **JWT per-request** (multi-user) | Remote agents (Hermes Docker VPS, Claude Web), MCP Inspector remote |
-| **`stdio`** | env vars (single-user legacy) | Claude Desktop local POC |
+## Outils (7)
 
-In HTTP mode the server exposes :
-- `POST /mcp` — JSON-RPC requests (initialize handshake + tool calls), requires `Authorization: Bearer <jwt>`
-- `GET /mcp` — server-sent events stream (server → client notifications), requires same JWT
-- `DELETE /mcp` — explicit session termination, requires same JWT
-- `GET /health` — Docker / reverse proxy health check (no auth, returns service status + active sessions count)
-
-Session management is **stateful** : each client gets a `mcp-session-id` header after the initialize handshake and reuses it for subsequent requests. Sessions are bound to the user extracted from the JWT (`sub` claim) and cannot be hijacked by a different user (returns 403 if JWT user ≠ session owner). Sessions are kept in-memory ; restarting the server invalidates them.
-
-## Authentication (HTTP mode — Story 25-2)
-
-Every request must include `Authorization: Bearer <jwt>` where `<jwt>` is a Supabase user JWT (typically obtained via `supabase.auth.signInWithPassword()` or refresh flow). The server :
-
-1. Verifies HS256 signature against `SUPABASE_JWT_SECRET` (set at server boot)
-2. Verifies expiration (claim `exp`)
-3. Extracts `sub` claim as the user id
-4. Creates a per-session Supabase client scoped via the user's JWT — RLS policies apply normally, so the user only ever sees their own data
-
-If the JWT is missing, malformed, expired, or signed with the wrong secret → 401 JSON-RPC error.
-
-### Where to get `SUPABASE_JWT_SECRET`
-
-Supabase Studio → Project Settings → API → JWT Secret. This is the HS256 shared secret used by Supabase Auth to sign user JWTs. **Do NOT confuse with the `anon` or `service_role` keys** — those are different.
-
-### Why JWT per-request (Story 25-2 architecture)
-
-The Sprint 21 POC used global env vars `SUPABASE_USER_JWT + USER_ID` (single-user, JWT redeployment every hour at refresh). Production needs multi-user — each Hermes/Claude Web/iOS user passes their own JWT, the server scopes RLS per-user without secret rotation pain.
-
----
-
-## What it does
-
-Exposes 3 tools to any MCP client (Claude Desktop, MCP Inspector, custom agent) :
-
-| Tool | What |
+| Outil | Rôle |
 |---|---|
-| `create_day_task` | Create a task scheduled for a specific day (name, date, planned pomodoros, optional project/domain) |
-| `list_today_tasks` | List today's tasks with progress + project name |
-| `list_projects` | List Kanban projects (filter by status, include archived flag) |
+| `create_day_task` | Crée une tâche **pour un jour** (`date`, défaut aujourd'hui) **ou dans le backlog** (`backlog: true`). Options : `planned_pomodoros` (1-99), `story_points` (1-21), `impact` (`high`/`low`), `urgency` (`urgent`/`not_urgent`), `due_date`, `domain_id`, `project_id`, `note`. Rangée **en fin de liste**. |
+| `list_tasks` | Lit les tâches d'un jour (`date`), d'une plage (`from` + `to`, 62 jours max) ou du backlog (`backlog: true`). Limité à 200 : `truncated` vaut `true` s'il y en a plus. |
+| `list_today_tasks` | Tâches d'aujourd'hui avec avancement et nom du projet. |
+| `update_day_task` | Modifie une tâche (`id`) : seuls les champs fournis changent ; `date` / `backlog: true` la déplace (rangée en fin de liste) ; `null` efface impact, urgence, échéance, note, domaine, projet. |
+| `complete_day_task` | Coche (`completed: true`, défaut) ou décoche une tâche. Ne touche pas aux compteurs de pomodoros. |
+| `list_domains` | Domaines de vie et leurs identifiants (pour `domain_id`). |
+| `list_projects` | Projets Kanban et leurs identifiants (pour `project_id`). |
 
-The server connects directly to Supabase via REST API using a user-scoped JWT token. RLS policies apply normally (you only see your own data).
+**Garde-fous (décision du 2026-11-05)** : **aucun outil ne supprime** ; les arguments sont validés strictement (un argument inconnu, comme `user_id` ou `title`, est une erreur) ; `user_id` vient toujours du jeton ; une tâche d'un autre utilisateur est « introuvable » (aucune fuite) ; « aujourd'hui » suit le fuseau de l'utilisateur.
 
----
+## Authentification (HTTP)
 
-## Setup
+Chaque requête porte `Authorization: Bearer <jwt>`, un jeton d'utilisateur Supabase (connexion `signInWithPassword` ou renouvellement `refresh_token`).
 
-### Prerequisites
+1. Signature vérifiée : **ES256/RS256/EdDSA** via le JWKS du projet (`SUPABASE_URL`), ou HS256 via `SUPABASE_JWT_SECRET` (repli).
+2. Expiration vérifiée ; `sub` = identifiant de l'utilisateur.
+3. **Le jeton de CHAQUE requête est utilisé pour les appels à Supabase** (Story 25-6) : une session ouverte plus d'une heure continue de fonctionner tant que l'agent envoie un jeton valide et renouvelé. Le jeton d'une session ne peut servir qu'à son propriétaire (403 sinon).
+4. Jeton absent, falsifié ou expiré : 401, sans accès aux données.
 
-- Node.js 18+ (tested with v24)
-- Supabase user account with data in AgenticFocus
-- Claude Desktop (or any MCP-compatible client)
+Les jetons durent environ **1 heure** ; le refresh token est **à usage unique** (enregistrer le nouveau à chaque renouvellement). Les sessions MCP sont en mémoire : un redémarrage du serveur impose un nouveau `initialize`.
 
-### Install + build
+## Variables d'environnement
 
-```bash
-cd "c:/KM/Assets/Claude/01 product/mcp-server"
-npm install
-npm run build
-```
-
-This produces `dist/index.js`.
-
-### Required environment variables
-
-| Var | Description | Where to get it |
+| Variable | Obligatoire | Rôle |
 |---|---|---|
-| `SUPABASE_URL` | Your Supabase project URL | Supabase Studio → Project Settings → API → URL |
-| `SUPABASE_ANON_KEY` | Public anon key | Same place → `anon` key |
-| `SUPABASE_USER_JWT` | A user-scoped JWT token | Sign in via Supabase Studio Auth → Sessions, OR copy from desktop app DevTools (`localStorage.getItem('supabase.auth.token')`) |
-| `USER_ID` | Your Supabase auth user UUID | Supabase Studio → Auth → Users → click your user → copy ID |
+| `SUPABASE_URL` | oui | URL du projet Supabase |
+| `SUPABASE_ANON_KEY` | oui | Clé `anon` (publique par conception) |
+| `SUPABASE_JWT_SECRET` | HTTP | Secret HS256 (repli ; les jetons ES256 passent par le JWKS) |
+| `TRANSPORT` | non | `http` (défaut) ou `stdio` |
+| `PORT` | non | Port HTTP (défaut 3000) |
+| `USER_TIMEZONE` | non | Fuseau de l'utilisateur pour « aujourd'hui » (défaut `Europe/Paris`) |
+| `SUPABASE_USER_JWT`, `USER_ID` | stdio | Mode mono-utilisateur local |
 
-⚠ The JWT expires (usually ~1h). You'll need to refresh it periodically. For POC simplicity we don't handle refresh — V2 (Sprint 22+) story.
-
-### Configure Claude Desktop
-
-Edit `claude_desktop_config.json` :
-- Mac : `~/Library/Application Support/Claude/claude_desktop_config.json`
-- Windows : `%APPDATA%\Claude\claude_desktop_config.json`
-
-Add :
-
-```json
-{
-  "mcpServers": {
-    "agenticfocus": {
-      "command": "node",
-      "args": ["C:\\KM\\Assets\\Claude\\01 product\\mcp-server\\dist\\index.js"],
-      "env": {
-        "SUPABASE_URL": "https://YOUR_PROJECT.supabase.co",
-        "SUPABASE_ANON_KEY": "eyJhbGciOi...",
-        "SUPABASE_USER_JWT": "eyJhbGciOi...",
-        "USER_ID": "d9dd9a28-ec9c-4a67-9253-f673021c1611"
-      }
-    }
-  }
-}
-```
-
-Restart Claude Desktop. Look for the 🔌 plug icon in the input area — clicking it should show `agenticfocus` server with 3 tools.
-
----
-
-## Test via MCP Inspector (no Claude Desktop required)
-
-### HTTP mode (Story 25-2, JWT per-request multi-user)
-
-In one terminal, start the server :
-
-```powershell
-$env:SUPABASE_URL="https://YOUR.supabase.co"
-$env:SUPABASE_ANON_KEY="eyJ..."
-$env:SUPABASE_JWT_SECRET="your-jwt-secret-from-supabase-studio"
-$env:TRANSPORT="http"
-$env:PORT="3000"
-npm run dev
-```
-
-Sanity check it's alive :
-
-```powershell
-curl http://localhost:3000/health
-# → {"status":"ok","service":"agenticfocus-mcp","transport":"http","version":"0.3.0-jwt","sessions":0}
-```
-
-Get a user JWT (from Supabase Studio Auth → Sessions, or from the desktop/mobile app's localStorage `supabase.auth.token`).
-
-Test with curl :
-
-```powershell
-$JWT="eyJhbGc..."  # your user JWT
-curl -X POST http://localhost:3000/mcp `
-  -H "Content-Type: application/json" `
-  -H "Accept: application/json, text/event-stream" `
-  -H "Authorization: Bearer $JWT" `
-  -d '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"curl","version":"0.0.1"}},"id":1}'
-# Response : 200 OK + mcp-session-id header
-```
-
-In another terminal, launch MCP Inspector :
+## Développement
 
 ```bash
-npx @modelcontextprotocol/inspector
+npm install
+npm run build          # tsc → dist/
+npm test               # vitest : outils, validation, serveur HTTP de bout en bout
+npm run dev:http       # serveur local (PORT=3000)
+node deploy/e2e-local.mjs   # preuve contre le vrai Supabase avec le compte de test B (build requis)
 ```
 
-Then in the Inspector UI :
-1. Transport : `Streamable HTTP`
-2. URL : `http://localhost:3000/mcp`
-3. **Authentication** : paste your JWT in the `Authorization` field with value `Bearer <jwt>` (or use the Auth tab)
-4. Click `Connect` → should show the 3 tools
-5. Click `list_today_tasks` → JSON response with your tasks for today
+`deploy/e2e-local.mjs` lit les identifiants du compte de test dans `../agenticfocus-desktop/.env.test` (jamais affichés) et supprime ses données à la fin. Il ouvre une session avec un jeton, puis appelle les outils avec un second jeton.
 
-### Stdio mode (POC legacy)
+## Utilisation
+
+- **Hermes (Python)** : `_bmad-output/scripts/hermes_mcp_client.py` (connexion et renouvellement automatiques du jeton, rejeu après 401/403/404 de session).
+- **Claude** : voir `_bmad-output/implementation-artifacts/27-9-hermes-claude-brancher-le-mcp.md`.
+- **Inspecteur MCP** : `npx @modelcontextprotocol/inspector`, transport *Streamable HTTP*, URL `/mcp`, en-tête `Authorization: Bearer <jwt>`.
+
+Exemple d'appel (curl, après `initialize`) :
 
 ```bash
-SUPABASE_URL=... SUPABASE_ANON_KEY=... SUPABASE_USER_JWT=... USER_ID=... npm run inspect:stdio
+curl -X POST https://mcp.109-176-198-7.sslip.io/mcp \
+  -H "Authorization: Bearer $JWT" -H "Mcp-Session-Id: $SID" \
+  -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"create_day_task","arguments":{"name":"Relire le contrat","backlog":true}}}'
 ```
 
-This opens a web UI where you can manually invoke each tool with sample inputs.
+## Docker et déploiement
 
----
-
-## Example prompts (Claude Desktop)
-
-> "Crée-moi une tâche 'Réviser PR Sprint 21' pour aujourd'hui avec 2 pomodoros."
-
-Claude calls `create_day_task({ name: "Réviser PR Sprint 21", planned_pomodoros: 2 })` → task appears in AgenticFocus mobile/desktop in ~2s via Supabase Realtime.
-
-> "Liste-moi mes tâches du jour."
-
-Claude calls `list_today_tasks()` → returns array, formatted naturally.
-
-> "Quels sont mes projets en cours dans la colonne Doing ?"
-
-Claude calls `list_projects({ kanban_status: "doing" })` → returns active projects.
-
----
-
-## Limitations (POC)
-
-- Auth JWT expire ~1h, pas de refresh automatique (Sprint 22)
-- Pas d'IPC desktop : pas de `start_pomodoro` (le TimerService est interne à Tauri/Android)
-- 3 outils seulement — P2 (mark_complete, create_project, get_goals, search_templates) en backlog
-- Pas de tests automatisés — Sprint 22 ajoute coverage
-
-Voir [`_bmad-output/research/mcp-investigation.md`](../_bmad-output/research/mcp-investigation.md) section 8 pour la liste complète.
-
----
-
-## Sprint 21 Story 23-7 closure (stdio POC)
-
-Build : `npm run build` → `dist/index.js` ~5KB
-LOC : ~270 lignes (`src/index.ts` + config + README)
-
-Decision Sprint 22+ : production-ize (~4.5j estimé) selon ratio valeur/effort.
-
----
-
-## Docker (Story 25-3 — Sprint 24)
-
-The server ships as an OCI image on **GitHub Container Registry** :
-
-```
-ghcr.io/avapuschmann/agenticfocus-mcp-server:0.3.0-jwt
-ghcr.io/avapuschmann/agenticfocus-mcp-server:latest
-```
-
-Image size : 279 MB (Node 22-alpine + production deps). Multi-stage build, runs as non-root user `node`.
-
-### Local build + run
-
-```powershell
-cd "c:\KM\Assets\Claude\01 product\mcp-server"
-
-# Build
-docker build -t agenticfocus-mcp:0.3.0-jwt .
-
-# Run (foreground, see logs)
-docker run --rm -p 3000:3000 `
-  -e SUPABASE_URL="https://YOUR.supabase.co" `
-  -e SUPABASE_ANON_KEY="eyJ..." `
-  -e SUPABASE_JWT_SECRET="your-jwt-secret" `
-  agenticfocus-mcp:0.3.0-jwt
-
-# Health check (from another terminal)
-curl http://localhost:3000/health
-```
-
-### Local via docker compose
-
-Copy `.env.example` → `.env.docker`, fill in real values, then :
-
-```powershell
-docker compose up --build
-docker compose down
-```
-
-### Pull from ghcr.io (no local build)
+Image multi-étapes Node 22-alpine, utilisateur non-root, `HEALTHCHECK` sur `/health`.
 
 ```bash
-# If package is public — no login needed
-docker pull ghcr.io/avapuschmann/agenticfocus-mcp-server:0.3.0-jwt
-
-# If package is private — login first with a PAT (read:packages scope)
-echo $GITHUB_PAT | docker login ghcr.io -u YOUR_USERNAME --password-stdin
-docker pull ghcr.io/avapuschmann/agenticfocus-mcp-server:0.3.0-jwt
-docker logout ghcr.io
+docker build -t agenticfocus-mcp:0.5.0 .
+docker run --rm -p 3000:3000 -e SUPABASE_URL=… -e SUPABASE_ANON_KEY=… -e SUPABASE_JWT_SECRET=… agenticfocus-mcp:0.5.0
 ```
 
-### Healthcheck built-in
+**Production** : VPS Hostinger, `https://mcp.109-176-198-7.sslip.io`, Traefik en reverse proxy. **Ne pas redéployer depuis `docker-compose.yml` / `deploy/docker-compose.prod.yml` du dépôt sans vérifier le tag d'image** : l'image `ghcr.io/…:0.3.0-jwt` référencée par d'anciens fichiers ne contient pas la vérification ES256. La procédure pas à pas (construction de l'image sur le VPS, annulation) est dans la Story 27-9.
 
-The Dockerfile declares :
+## Limites
 
-```
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget -qO- "http://localhost:${PORT:-3000}/health" || exit 1
-```
-
-Docker engine + reverse proxies (Caddy/Traefik) will auto-detect container health and restart if `/health` ever fails.
-
-### Tag conventions
-
-- `latest` — moving target (latest push). Convenient for dev, **avoid in prod**.
-- `0.3.0-jwt` — semver pinned. **Use this in production** (deterministic).
-- (Future) `<git-sha>-short` — for debugging specific commits, set up via CI.
-
----
-
-## Sprint 24 Story 25-1 — HTTP transport
-
-**Date** : 2026-05-23
-**Effort** : 2 SP
-
-Foundation for Epic 25 Production. Le serveur écoute désormais en HTTP avec `StreamableHTTPServerTransport` (MCP SDK 1.29+, successeur officiel SSE). Le mode stdio reste fonctionnel pour rétro-compatibilité Claude Desktop.
-
-**Suite Epic 25** :
-- Story 25-2 : Auth header JWT per-request (remplace env var SUPABASE_USER_JWT global)
-- Story 25-3 : Dockerfile multi-stage + build registry + déploiement VPS Hostinger
-- Story 25-4 : Reverse proxy HTTPS + DNS mcp.agenticfocus.app + Let's Encrypt
-- Story 25-5 : Tests E2E Hermes (Docker VPS) + MCP Inspector distant
+- Pas de suppression, ni de sous-tâches, objectifs, routines ou bilans (Epic 27, suite).
+- Pas de démarrage de pomodoro (le minuteur est interne aux applications).
+- Sessions MCP en mémoire (un redémarrage les invalide).
+- Un jeton d'1 heure impose un fournisseur de jeton côté agent (Hermes : module Python fourni).

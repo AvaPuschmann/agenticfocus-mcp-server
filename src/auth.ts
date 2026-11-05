@@ -15,6 +15,7 @@
 
 import type { Request, Response, NextFunction } from "express";
 import { jwtVerify, createRemoteJWKSet, decodeProtectedHeader, type JWTPayload } from "jose";
+import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 
 // ─── JWKS resolver (asymmetric signing keys) ──────────────────────────────────
 // Supabase a migré les tokens utilisateur vers des JWT Signing Keys asymétriques
@@ -43,6 +44,8 @@ declare global {
     interface Request {
       userId?: string;
       userJwt?: string;
+      /** Lu par le transport MCP et transmis aux outils (`extra.authInfo`) : le jeton de CETTE requête. */
+      auth?: AuthInfo;
     }
   }
 }
