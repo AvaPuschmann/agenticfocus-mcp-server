@@ -15,7 +15,7 @@ import {
   AgentAuthError, isAgentToken, type AgentTokenStore, type RateLimiter, type Scope,
 } from "./agentTokens.js";
 
-export const SERVER_VERSION = "0.6.0";
+export const SERVER_VERSION = "0.6.1";
 
 /** Outils qui modifient des données : interdits à un jeton d'agent en lecture seule. */
 export const WRITE_TOOLS = new Set(["create_day_task", "update_day_task", "complete_day_task"]);

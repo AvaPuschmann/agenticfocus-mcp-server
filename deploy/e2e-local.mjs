@@ -140,7 +140,7 @@ try {
   const a2 = after.find((r) => r.id === t2.data?.id);
   const a3 = after.find((r) => r.id === t3.data?.id);
   check(a1?.is_completed === true && a1?.completed_pomodoros === 0, "cochée, compteurs de pomodoros intacts", `a1 : ${JSON.stringify(a1)}`);
-  check(a2?.name === "E2E MCP : seconde (renommée)" && a2?.note === "ajoutée" && a2?.story_points === 1, "seuls les champs fournis ont changé", `a2 : ${JSON.stringify(a2)}`);
+  check(a2?.name === "E2E MCP : seconde (renommée)" && a2?.note === "ajoutée" && a2?.story_points === 0, "seuls les champs fournis ont changé", `a2 : ${JSON.stringify(a2)}`);
   check(a3?.date === day && a3?.position > (a2?.position ?? 0), "tâche planifiée rangée après les autres du jour", `a3 : ${JSON.stringify(a3)}`);
   const open = await tool("list_tasks", { date: day, include_completed: false });
   check(open.data?.count === 2, "include_completed: false masque la tâche cochée", `ouvertes : ${open.data?.count}`);

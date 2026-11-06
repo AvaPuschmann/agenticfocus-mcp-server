@@ -72,6 +72,6 @@ CMD ["node", "dist/index.js"]
 # ─── Image metadata (OCI labels) ────────────────────────────────────────────
 LABEL org.opencontainers.image.title="agenticfocus-mcp-server"
 LABEL org.opencontainers.image.description="MCP server for AgenticFocus — multi-user, JWT-authenticated, StreamableHTTP transport"
-LABEL org.opencontainers.image.version="0.6.0"
+LABEL org.opencontainers.image.version="0.6.1"
 LABEL org.opencontainers.image.source="https://github.com/AvaPuschmann/agenticfocus-mcp-server"
 LABEL org.opencontainers.image.licenses="ISC"
