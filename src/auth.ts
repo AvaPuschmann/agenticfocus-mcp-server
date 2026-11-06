@@ -46,6 +46,8 @@ declare global {
       userJwt?: string;
       /** Lu par le transport MCP et transmis aux outils (`extra.authInfo`) : le jeton de CETTE requête. */
       auth?: AuthInfo;
+      /** Renseigné quand la requête porte un jeton d'agent (Story 27-10). */
+      agent?: { id: string; scope: "read" | "write" };
     }
   }
 }
