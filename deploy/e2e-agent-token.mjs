@@ -47,10 +47,13 @@ writeFileSync(join(work, "mcp-credentials.json"), JSON.stringify({ supabase_url:
 const tokenFile = join(work, "agent-tokens.json");
 const KEY = randomBytes(32).toString("base64");
 const PORT = 3097;
-const BASE = `http://127.0.0.1:${PORT}`;
+// MCP_BASE_URL=https://…  : teste un serveur déjà déployé (aucun serveur local ; redémarrages et fichier de jetons non testés).
+const EXTERNAL = (process.env.MCP_BASE_URL || "").replace(/\/$/, "");
+const BASE = EXTERNAL || `http://127.0.0.1:${PORT}`;
 
 let server = null;
 async function startServer(extraEnv = { AGENT_TOKEN_KEY: KEY, AGENT_TOKEN_FILE: tokenFile }) {
+  if (EXTERNAL) return () => "";
   const env = { ...process.env, TRANSPORT: "http", PORT: String(PORT), SUPABASE_URL: SB_URL, SUPABASE_ANON_KEY: SB_KEY, SUPABASE_JWT_SECRET: "inutile-pour-les-jetons-asymetriques" };
   delete env.AGENT_TOKEN_KEY; delete env.AGENT_TOKEN_FILE;
   server = spawn(process.execPath, ["dist/index.js"], { env: { ...env, ...extraEnv }, stdio: ["ignore", "ignore", "pipe"] });
@@ -133,7 +136,8 @@ try {
   check((await sb.from("day_tasks").select("id").eq("user_id", userId)).data?.length === 1, "aucune tâche créée par le jeton en lecture", "une tâche a été créée en lecture seule");
 
   console.log("\n3. Redémarrages du serveur (cache vidé : vrai renouvellement de session à chaque fois)");
-  for (const round of [1, 2]) {
+  if (EXTERNAL) console.log("  info   serveur déjà déployé : redémarrages non testés ici");
+  for (const round of EXTERNAL ? [] : [1, 2]) {
     await stopServer();
     getLog = await startServer();
     const s = await open(write);
@@ -151,6 +155,10 @@ try {
   check((await open("afk_" + "x".repeat(43))).status === 401, "jeton inconnu : 401", "jeton inconnu accepté");
 
   console.log("\n5. Secrets et fonction désactivée");
+  if (EXTERNAL) {
+    console.log("  info   serveur déjà déployé : fichier de jetons et désactivation sans clé non testés ici");
+    throw new Error("__fin_externe__");
+  }
   const raw = readFileSync(tokenFile, "utf8");
   check(!raw.includes(write) && !raw.includes(read) && !raw.includes(auth.session.refresh_token), "le fichier de jetons ne contient aucun jeton en clair", "secret en clair dans le fichier");
   const sessionsInFile = JSON.parse(raw).tokens.map((t) => t.refreshTokenEnc);
@@ -161,7 +169,7 @@ try {
   const errs = getLog().split("\n").filter((l) => /afk_/.test(l));
   check(errs.length === 0, "aucun jeton dans les journaux du serveur", "un jeton apparaît dans les journaux");
 } catch (e) {
-  ko("parcours interrompu : " + String(e.message).split("\n")[0]);
+  if (e.message !== "__fin_externe__") ko("parcours interrompu : " + String(e.message).split("\n")[0]);
 } finally {
   await stopServer();
   await cleanup();
