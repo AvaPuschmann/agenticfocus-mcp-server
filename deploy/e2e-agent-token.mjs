@@ -1,7 +1,7 @@
 // Story 27-10 — preuve de bout en bout des JETONS D'AGENT : serveur local (build) + VRAI Supabase + compte de test B.
 //
 //   1. création de deux jetons (écriture, lecture seule) avec le script CLI `agent-token.mjs` (celui de Philippe) ;
-//   2. jeton en écriture : les 7 outils, une tâche créée dans le compte B ; jeton en lecture : 4 outils, écriture refusée ;
+//   2. jeton en écriture : les 11 outils, une tâche créée dans le compte B ; jeton en lecture : 4 outils, écriture refusée ;
 //   3. REDÉMARRAGE du serveur (cache vidé) : les jetons survivent et la session est renouvelée pour de vrai (refresh réel) ;
 //      deuxième redémarrage : le refresh_token ENREGISTRÉ au renouvellement précédent est bien celui qui sert ;
 //   4. liste, révocation (refusé immédiatement), jeton inconnu, fonction désactivée sans clé ;
@@ -120,7 +120,7 @@ try {
   const w = await open(write);
   check(w.status === 200, "session ouverte avec le jeton en écriture", `ouverture refusée : ${w.status}`);
   const names = await tools(write, w.sid);
-  check(names.length === 7, `jeton en écriture : 7 outils`, `outils : ${names.join(",")}`);
+  check(names.length === 11, `jeton en écriture : 11 outils`, `outils : ${names.join(",")}`);
   const created = await call(write, w.sid, "create_day_task", { name: "E2E jeton d'agent", backlog: true });
   check(created.data?.success === true, "tâche créée via le jeton d'agent", `création : ${created.text}`);
   const row = (await sb.from("day_tasks").select("*").eq("user_id", userId)).data?.[0];

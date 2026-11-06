@@ -15,10 +15,13 @@ import {
   AgentAuthError, isAgentToken, type AgentTokenStore, type RateLimiter, type Scope,
 } from "./agentTokens.js";
 
-export const SERVER_VERSION = "0.6.1";
+export const SERVER_VERSION = "0.7.0";
 
 /** Outils qui modifient des données : interdits à un jeton d'agent en lecture seule. */
-export const WRITE_TOOLS = new Set(["create_day_task", "update_day_task", "complete_day_task"]);
+export const WRITE_TOOLS = new Set([
+  "create_day_task", "update_day_task", "complete_day_task",
+  "create_project", "update_project", "move_project", "archive_project",
+]);
 
 /** Sans information de portée (mode stdio), tout est permis ; sinon la portée « write » est requise pour écrire. */
 const canWrite = (scopes?: string[]): boolean => !scopes || scopes.includes("write");

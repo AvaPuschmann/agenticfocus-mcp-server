@@ -8,47 +8,24 @@
  *  - aucune troncature silencieuse : les listes bornées indiquent `truncated`.
  */
 import { randomUUID } from "node:crypto";
-import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   ToolInputError, checkArgs, optString, reqString, optInt, optBool, optEnum, optDate, reqUuid, optUuid, daysBetween,
   type Args,
 } from "./validate.js";
 
-export { ToolInputError };
+import { type ToolContext, todayIn, dueDateToMs, nowMs, fail, assertOwned } from "./common.js";
+import {
+  createProject, updateProject, moveProject, archiveProject, PROJECT_TOOL_DEFINITIONS,
+} from "./projects.js";
 
-export interface ToolContext {
-  userId: string;
-  supabase: SupabaseClient;
-  now?: () => Date;
-  /** Fuseau de l'utilisateur pour « aujourd'hui » (le serveur tourne en UTC). */
-  timeZone?: string;
-}
+export { ToolInputError, todayIn, dueDateToMs };
+export type { ToolContext };
 
-const DEFAULT_TZ = "Europe/Paris";
 export const LIST_LIMIT = 200;
 export const MAX_RANGE_DAYS = 62;
 
 const TASK_COLUMNS =
   "id, name, date, planned_pomodoros, completed_pomodoros, is_completed, story_points, impact, urgency, due_date, position, project_id, domain_id, note";
-
-/** « Aujourd'hui » AAAA-MM-JJ dans le fuseau de l'utilisateur (et non celui du serveur). */
-export function todayIn(ctx: Pick<ToolContext, "now" | "timeZone">): string {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: ctx.timeZone ?? DEFAULT_TZ, year: "numeric", month: "2-digit", day: "2-digit",
-  }).format((ctx.now ?? (() => new Date()))());
-  return parts; // en-CA → AAAA-MM-JJ
-}
-
-/** Échéance AAAA-MM-JJ → millisecondes à 12:00 UTC : la même date s'affiche dans tous les fuseaux proches de l'Europe. */
-export function dueDateToMs(date: string): number {
-  return Date.UTC(+date.slice(0, 4), +date.slice(5, 7) - 1, +date.slice(8, 10), 12);
-}
-
-const nowMs = (ctx: ToolContext): number => (ctx.now ?? (() => new Date()))().getTime();
-
-function fail(what: string, error: { message: string; code?: string }): never {
-  throw new Error(`${what} : ${error.message}${error.code ? ` (${error.code})` : ""}`);
-}
 
 /** Position « en fin de liste » : dernière position du jour (ou du backlog) + 1. */
 async function nextPosition(ctx: ToolContext, date: string | null): Promise<number> {
@@ -58,13 +35,6 @@ async function nextPosition(ctx: ToolContext, date: string | null): Promise<numb
   if (error) fail("Lecture de la position impossible", error);
   const last = (data as Array<{ position: number | null }> | null)?.[0]?.position ?? 0;
   return last + 1;
-}
-
-/** Un domaine ou un projet référencé doit exister pour CET utilisateur : message clair plutôt qu'une erreur de clé étrangère. */
-async function assertOwned(ctx: ToolContext, table: "domains" | "projects", id: string, hint: string): Promise<void> {
-  const { data, error } = await ctx.supabase.from(table).select("id").eq("user_id", ctx.userId).eq("id", id).limit(1);
-  if (error) fail("Vérification impossible", error);
-  if (!data || data.length === 0) throw new ToolInputError(`${table === "domains" ? "domain_id" : "project_id"} inconnu. ${hint}`);
 }
 
 // ─── create_day_task ──────────────────────────────────────────────────────────
@@ -293,6 +263,10 @@ const HANDLERS: Record<string, Handler> = {
   complete_day_task: completeDayTask,
   list_domains: listDomains,
   list_projects: listProjects,
+  create_project: createProject,
+  update_project: updateProject,
+  move_project: moveProject,
+  archive_project: archiveProject,
 };
 
 export async function runTool(name: string, args: unknown, ctx: ToolContext): Promise<string> {
@@ -409,6 +383,7 @@ export const TOOL_DEFINITIONS = [
       },
     },
   },
+  ...PROJECT_TOOL_DEFINITIONS,
 ];
 
 export type { Args };

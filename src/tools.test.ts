@@ -351,7 +351,7 @@ describe("garde-fous généraux", () => {
   it("AUCUN outil de suppression n'est exposé, et l'appeler échoue", async () => {
     const names = TOOL_DEFINITIONS.map((t) => t.name);
     expect(names.filter((n) => /delete|remove|destroy|drop/i.test(n))).toEqual([]);
-    expect(names.sort()).toEqual(["complete_day_task", "create_day_task", "list_domains", "list_projects", "list_tasks", "list_today_tasks", "update_day_task"]);
+    expect(names.sort()).toEqual(["archive_project", "complete_day_task", "create_day_task", "create_project", "list_domains", "list_projects", "list_tasks", "list_today_tasks", "move_project", "update_day_task", "update_project"]);
     expect(await rejected("delete_day_task", { id: T1 })).toBeInstanceOf(ToolInputError);
   });
 

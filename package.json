@@ -1,6 +1,6 @@
 {
   "name": "agenticfocus-mcp-server",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "MCP server letting agents (Claude, Hermes) read and add AgenticFocus tasks with the user JWT (RLS applies). No delete tool.",
   "main": "dist/index.js",
   "type": "module",

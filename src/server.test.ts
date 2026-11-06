@@ -73,12 +73,12 @@ describe("serveur MCP — santé et outils", () => {
     expect(res).toMatchObject({ status: "ok", version: SERVER_VERSION });
   });
 
-  it("liste les 7 outils, dont aucun ne supprime", async () => {
+  it("liste les 11 outils, dont aucun ne supprime", async () => {
     const t = await jwt();
     const sid = await openSession(t);
     const out = await rpc(t, { jsonrpc: "2.0", id: 3, method: "tools/list" }, sid);
     const names = out.json.result.tools.map((x: { name: string }) => x.name).sort();
-    expect(names).toEqual(["complete_day_task", "create_day_task", "list_domains", "list_projects", "list_tasks", "list_today_tasks", "update_day_task"]);
+    expect(names).toEqual(["archive_project", "complete_day_task", "create_day_task", "create_project", "list_domains", "list_projects", "list_tasks", "list_today_tasks", "move_project", "update_day_task", "update_project"]);
   });
 });
 
