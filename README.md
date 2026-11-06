@@ -1,6 +1,6 @@
 # AgenticFocus MCP Server
 
-Serveur MCP (Model Context Protocol) qui permet à un agent (Claude, Hermes…) de **lire et d'ajouter des tâches** dans AgenticFocus, avec les droits de l'utilisateur. Version **0.6.1** (Epics 25 et 27).
+Serveur MCP (Model Context Protocol) qui permet à un agent (Claude, Hermes…) de **lire et d'ajouter des tâches** dans AgenticFocus, avec les droits de l'utilisateur. Version **0.7.0** (Epics 25 et 27).
 
 - **Transport HTTP** (production, multi-utilisateur) : `POST/GET/DELETE /mcp`, `GET /health`.
 - **Transport stdio** (Claude Desktop en local, un seul utilisateur, hérité du POC).
@@ -13,7 +13,7 @@ Agent ──Bearer <jeton Supabase de l'utilisateur>──►  MCP  ──même 
 
 L'agent s'authentifie **comme l'utilisateur** (sa session Supabase). Le serveur vérifie le jeton, puis parle à Supabase avec ce jeton : les règles d'accès (RLS) s'appliquent, l'agent ne voit que les données de l'utilisateur. La clé `service_role` n'est **jamais** utilisée.
 
-## Outils (7)
+## Outils (11)
 
 | Outil | Rôle |
 |---|---|
@@ -24,6 +24,10 @@ L'agent s'authentifie **comme l'utilisateur** (sa session Supabase). Le serveur 
 | `complete_day_task` | Coche (`completed: true`, défaut) ou décoche une tâche. Ne touche pas aux compteurs de pomodoros. |
 | `list_domains` | Domaines de vie et leurs identifiants (pour `domain_id`). |
 | `list_projects` | Projets Kanban et leurs identifiants (pour `project_id`). |
+| `create_project` | Crée un projet dans le tableau Kanban (`name` 1-120, `description`, `kanban_status` : backlog par défaut / todo / doing / done, `target_date`, `domain_id`), rangé en fin de colonne (pas de 1024) avec les dates de début et de fin de l'application. |
+| `update_project` | Modifie nom, description, échéance, domaine (seuls les champs fournis ; `null` efface). Ne change ni la colonne ni l'archivage. |
+| `move_project` | Déplace un projet vers une colonne ou le réordonne : `kanban_status`, et `below_project_id` OU `above_project_id` (sans voisin : fin de colonne). Met à jour les dates de début et de fin comme l'application. |
+| `archive_project` | Archive (`archived: true`, défaut) ou désarchive un projet ; il n'est jamais supprimé. |
 
 **Garde-fous (décision du 2026-11-05)** : **aucun outil ne supprime** ; les arguments sont validés strictement (un argument inconnu, comme `user_id` ou `title`, est une erreur) ; `user_id` vient toujours du jeton ; une tâche d'un autre utilisateur est « introuvable » (aucune fuite) ; « aujourd'hui » suit le fuseau de l'utilisateur.
 
@@ -99,7 +103,7 @@ curl -X POST https://mcp.109-176-198-7.sslip.io/mcp \
 Image multi-étapes Node 22-alpine, utilisateur non-root, `HEALTHCHECK` sur `/health`.
 
 ```bash
-docker build -t agenticfocus-mcp:0.6.1 .
+docker build -t agenticfocus-mcp:0.7.0 .
 docker run --rm -p 3000:3000 -e SUPABASE_URL=… -e SUPABASE_ANON_KEY=… -e SUPABASE_JWT_SECRET=… agenticfocus-mcp:0.6.1
 ```
 

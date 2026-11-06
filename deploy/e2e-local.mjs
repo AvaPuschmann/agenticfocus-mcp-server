@@ -48,7 +48,10 @@ const sb = second.sb;
 const userId = second.userId;
 check(first.token !== second.token, "deux jetons valides distincts pour le même utilisateur", "les deux jetons sont identiques (test non probant)");
 
-const cleanup = async () => { await sb.from("day_tasks").delete().eq("user_id", userId); };
+const cleanup = async () => {
+  await sb.from("day_tasks").delete().eq("user_id", userId);
+  await sb.from("projects").delete().eq("user_id", userId);
+};
 await cleanup();
 
 const server = EXTERNAL ? null : spawn(process.execPath, ["dist/index.js"], {
@@ -96,7 +99,7 @@ try {
 
   const tools = await rpc(second.token, { jsonrpc: "2.0", id: 2, method: "tools/list" }, sid);
   const names = (tools.json?.result?.tools ?? []).map((t) => t.name).sort();
-  check(names.length === 7 && !names.some((n) => /delete|remove/i.test(n)), `7 outils, aucun outil de suppression (${names.join(", ")})`, `outils inattendus : ${names.join(", ")}`);
+  check(names.length === 11 && !names.some((n) => /delete|remove/i.test(n)), `11 outils, aucun outil de suppression (${names.join(", ")})`, `outils inattendus : ${names.join(", ")}`);
 
   console.log("\n2. Créer");
   const day = "2026-11-12";
@@ -145,12 +148,54 @@ try {
   const open = await tool("list_tasks", { date: day, include_completed: false });
   check(open.data?.count === 2, "include_completed: false masque la tâche cochée", `ouvertes : ${open.data?.count}`);
 
+  console.log("\n5b. Projets (Story 27-11)");
+  const pr1 = await tool("create_project", { name: "E2E projet A", description: "créé par l'agent", target_date: "2026-12-31" });
+  check(pr1.data?.success === true && pr1.data.kanban_position === 1024, `projet A créé en backlog (position ${pr1.data?.kanban_position})`, `création : ${pr1.text}`);
+  const pr2 = await tool("create_project", { name: "E2E projet B", kanban_status: "todo" });
+  const pr3 = await tool("create_project", { name: "E2E projet C", kanban_status: "todo" });
+  check(pr3.data?.kanban_position === 2048, "C rangé après B dans la colonne todo (+1024)", `positions : ${pr2.data?.kanban_position}, ${pr3.data?.kanban_position}`);
+  const pRows = (await sb.from("projects").select("*").eq("user_id", userId)).data ?? [];
+  const rA = pRows.find((r) => r.id === pr1.data?.id);
+  const rB = pRows.find((r) => r.id === pr2.data?.id);
+  check(rA && rA.user_id === userId && rA.kanban_status === "backlog" && rA.started_at === null && rA.is_archived === false && rA.target_date === Date.UTC(2026, 11, 31, 12) && Array.isArray(rA.tag_ids) && rA.tag_ids.length === 0,
+    "projet A en base : bon utilisateur, backlog, sans date de début, échéance 12:00 UTC, pas de tags", `ligne A : ${JSON.stringify(rA)}`);
+  check(rB && rB.kanban_status === "todo" && typeof rB.started_at === "number" && rB.finished_at === null, "projet B en todo : date de début posée", `ligne B : ${JSON.stringify(rB)}`);
+
+  const reorder = await tool("move_project", { id: pr3.data?.id, kanban_status: "todo", above_project_id: pr2.data?.id });
+  check(reorder.data?.success === true && reorder.data.kanban_position === 512, "C réordonné au-dessus de B (position 512)", `réordonnancement : ${reorder.text}`);
+  const toDone = await tool("move_project", { id: pr2.data?.id, kanban_status: "done" });
+  const rB2 = ((await sb.from("projects").select("*").eq("id", pr2.data?.id)).data ?? [])[0];
+  check(toDone.data?.success === true && rB2?.kanban_status === "done" && typeof rB2.finished_at === "number" && rB2.started_at === rB?.started_at, "B terminé : date de fin posée, début conservé", `B : ${JSON.stringify(rB2)}`);
+  const reopen = await tool("move_project", { id: pr2.data?.id, kanban_status: "doing" });
+  const rB3 = ((await sb.from("projects").select("*").eq("id", pr2.data?.id)).data ?? [])[0];
+  check(reopen.data?.success === true && rB3?.finished_at === null && rB3?.started_at === rB?.started_at, "B rouvert : date de fin effacée", `B : ${JSON.stringify(rB3)}`);
+
+  const upP = await tool("update_project", { id: pr1.data?.id, name: "E2E projet A (renommé)", description: null });
+  const rA2 = ((await sb.from("projects").select("*").eq("id", pr1.data?.id)).data ?? [])[0];
+  check(upP.data?.success === true && rA2?.name === "E2E projet A (renommé)" && rA2?.description === null && rA2?.kanban_status === "backlog", "projet A renommé, description effacée, colonne inchangée", `A : ${JSON.stringify(rA2)}`);
+
+  const linked = await tool("create_day_task", { name: "E2E tâche du projet", backlog: true, project_id: pr1.data?.id });
+  check(linked.data?.success === true, "une tâche peut être rattachée au projet créé", `rattachement : ${linked.text}`);
+  const arch = await tool("archive_project", { id: pr3.data?.id });
+  const rC = ((await sb.from("projects").select("*").eq("id", pr3.data?.id)).data ?? [])[0];
+  check(arch.data?.is_archived === true && rC?.is_archived === true && rC?.kanban_status === "todo", "C archivé (colonne conservée)", `C : ${JSON.stringify(rC)}`);
+
+  const listP = await tool("list_projects", {});
+  check(listP.data?.count === 2 && !listP.data.projects.some((x) => x.id === pr3.data?.id), "list_projects : 2 projets actifs, l'archivé est masqué", `list_projects : ${listP.data?.count}`);
+  const listAll = await tool("list_projects", { include_archived: true });
+  check(listAll.data?.count === 3, "include_archived : 3 projets", `include_archived : ${listAll.data?.count}`);
+  const badMove = await tool("move_project", { id: pr1.data?.id, kanban_status: "doing", below_project_id: pr3.data?.id });
+  check(badMove.isError && /non archivé/.test(badMove.text), "voisin archivé refusé", `voisin archivé : ${badMove.text}`);
+  const noDel = await tool("delete_project", { id: pr1.data?.id });
+  check(noDel.isError && (await sb.from("projects").select("id").eq("user_id", userId)).data?.length === 3, "aucun outil de suppression de projet", "un projet a pu être supprimé");
+  await tool("complete_day_task", { id: linked.data?.id }); // tâche liée : cochable, projet intact
+
   console.log("\n6. Garde-fous");
   const gone = await tool("update_day_task", { id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", name: "fantôme" });
   check(gone.isError && /introuvable/.test(gone.text), "identifiant inconnu : « introuvable »", `inconnu : ${gone.text}`);
   const del = await tool("delete_day_task", { id: t1.data?.id });
   check(del.isError, "aucun outil de suppression", `suppression possible : ${del.text}`);
-  check((await sb.from("day_tasks").select("id").eq("user_id", userId)).data?.length === 3, "les 3 tâches existent toujours", "des tâches ont disparu");
+  check((await sb.from("day_tasks").select("id").eq("user_id", userId)).data?.length === 4, "les 4 tâches existent toujours", "des tâches ont disparu");
   const anon = await fetch(BASE + "/mcp", { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: "{}" });
   check(anon.status === 401, "sans jeton : 401", `sans jeton : ${anon.status}`);
 } catch (e) {
