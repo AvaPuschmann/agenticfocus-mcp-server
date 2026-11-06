@@ -40,6 +40,11 @@ RUN npm install --omit=dev --no-audit --no-fund && \
 # Copy compiled JS from builder stage
 COPY --from=builder /app/dist ./dist
 
+# Stockage des jetons d'agent (Story 27-10) : dossier appartenant à l'utilisateur non-root, à monter en volume
+# (un volume nommé vide hérite de ce propriétaire au premier montage).
+RUN mkdir -p /data && chown node:node /data
+VOLUME ["/data"]
+
 # Run as non-root user (node user uid 1000 ships with the official image)
 USER node
 
@@ -57,6 +62,8 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 #   - SUPABASE_ANON_KEY
 #   - SUPABASE_JWT_SECRET
 # Optional:
+#   - AGENT_TOKEN_KEY (32 octets base64) : active les jetons d'agent ; AGENT_TOKEN_FILE (défaut /data/agent-tokens.json)
+#   - USER_TIMEZONE (défaut Europe/Paris)
 #   - PORT (default 3000)
 #   - TRANSPORT (default http ; only http makes sense in a container)
 
@@ -65,6 +72,6 @@ CMD ["node", "dist/index.js"]
 # ─── Image metadata (OCI labels) ────────────────────────────────────────────
 LABEL org.opencontainers.image.title="agenticfocus-mcp-server"
 LABEL org.opencontainers.image.description="MCP server for AgenticFocus — multi-user, JWT-authenticated, StreamableHTTP transport"
-LABEL org.opencontainers.image.version="0.3.0-jwt"
+LABEL org.opencontainers.image.version="0.6.0"
 LABEL org.opencontainers.image.source="https://github.com/AvaPuschmann/agenticfocus-mcp-server"
 LABEL org.opencontainers.image.licenses="ISC"
