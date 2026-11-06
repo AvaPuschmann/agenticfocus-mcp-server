@@ -94,11 +94,11 @@ export async function createDayTask(raw: unknown, ctx: ToolContext): Promise<str
     user_id: ctx.userId,
     name,
     date,
-    planned_pomodoros: optInt(args, "planned_pomodoros", 1, 99) ?? 1,
+    planned_pomodoros: optInt(args, "planned_pomodoros", 0, 99) ?? 1,
     completed_pomodoros: 0,
     is_completed: false,
     position: await nextPosition(ctx, date),
-    story_points: optInt(args, "story_points", 1, 21) ?? 1,
+    story_points: optInt(args, "story_points", 0, 999) ?? 0,
     impact: impact ?? null,
     urgency: urgency ?? null,
     due_date: dueDate ? dueDateToMs(dueDate) : null,
@@ -193,9 +193,9 @@ export async function updateDayTask(raw: unknown, ctx: ToolContext): Promise<str
 
   const name = optString(args, "name", { min: 1, max: 200 });
   if (name !== undefined) patch.name = name;
-  const pomos = optInt(args, "planned_pomodoros", 1, 99);
+  const pomos = optInt(args, "planned_pomodoros", 0, 99);
   if (pomos !== undefined) patch.planned_pomodoros = pomos;
-  const points = optInt(args, "story_points", 1, 21);
+  const points = optInt(args, "story_points", 0, 999);
   if (points !== undefined) patch.story_points = points;
   const impact = optEnum(args, "impact", ["high", "low"] as const, true);
   if (impact !== undefined) patch.impact = impact;
@@ -318,8 +318,8 @@ export const TOOL_DEFINITIONS = [
         name: { type: "string", minLength: 1, maxLength: 200, description: "Titre de la tâche" },
         date: { ...DATE_PROP, description: "Jour AAAA-MM-JJ (défaut : aujourd'hui). Incompatible avec backlog." },
         backlog: { type: "boolean", description: "true = tâche sans date (backlog)" },
-        planned_pomodoros: { type: "integer", minimum: 1, maximum: 99, description: "Pomodoros prévus (défaut 1)" },
-        story_points: { type: "integer", minimum: 1, maximum: 21, description: "Points de valeur (défaut 1)" },
+        planned_pomodoros: { type: "integer", minimum: 0, maximum: 99, description: "Pomodoros prévus, 0 = aucun (défaut 1)" },
+        story_points: { type: "integer", minimum: 0, maximum: 999, description: "Points de valeur, comme dans l'application : 0 si non évalué (défaut 0)" },
         impact: IMPACT,
         urgency: URGENCY,
         due_date: { type: ["string", "null"], pattern: "^\\d{4}-\\d{2}-\\d{2}$", description: "Échéance AAAA-MM-JJ" },
@@ -367,8 +367,8 @@ export const TOOL_DEFINITIONS = [
         name: { type: "string", minLength: 1, maxLength: 200 },
         date: { ...DATE_PROP, description: "Déplace la tâche à ce jour" },
         backlog: { type: "boolean", description: "true = déplace la tâche au backlog" },
-        planned_pomodoros: { type: "integer", minimum: 1, maximum: 99 },
-        story_points: { type: "integer", minimum: 1, maximum: 21 },
+        planned_pomodoros: { type: "integer", minimum: 0, maximum: 99 },
+        story_points: { type: "integer", minimum: 0, maximum: 999 },
         impact: IMPACT,
         urgency: URGENCY,
         due_date: { type: ["string", "null"], pattern: "^\\d{4}-\\d{2}-\\d{2}$" },

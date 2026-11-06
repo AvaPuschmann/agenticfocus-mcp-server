@@ -1,6 +1,6 @@
 # AgenticFocus MCP Server
 
-Serveur MCP (Model Context Protocol) qui permet à un agent (Claude, Hermes…) de **lire et d'ajouter des tâches** dans AgenticFocus, avec les droits de l'utilisateur. Version **0.6.0** (Epics 25 et 27).
+Serveur MCP (Model Context Protocol) qui permet à un agent (Claude, Hermes…) de **lire et d'ajouter des tâches** dans AgenticFocus, avec les droits de l'utilisateur. Version **0.6.1** (Epics 25 et 27).
 
 - **Transport HTTP** (production, multi-utilisateur) : `POST/GET/DELETE /mcp`, `GET /health`.
 - **Transport stdio** (Claude Desktop en local, un seul utilisateur, hérité du POC).
@@ -17,7 +17,7 @@ L'agent s'authentifie **comme l'utilisateur** (sa session Supabase). Le serveur 
 
 | Outil | Rôle |
 |---|---|
-| `create_day_task` | Crée une tâche **pour un jour** (`date`, défaut aujourd'hui) **ou dans le backlog** (`backlog: true`). Options : `planned_pomodoros` (1-99), `story_points` (1-21), `impact` (`high`/`low`), `urgency` (`urgent`/`not_urgent`), `due_date`, `domain_id`, `project_id`, `note`. Rangée **en fin de liste**. |
+| `create_day_task` | Crée une tâche **pour un jour** (`date`, défaut aujourd'hui) **ou dans le backlog** (`backlog: true`). Options : `planned_pomodoros` (0-99, défaut 1), `story_points` (0-999, comme dans l'application ; défaut 0), `impact` (`high`/`low`), `urgency` (`urgent`/`not_urgent`), `due_date`, `domain_id`, `project_id`, `note`. Rangée **en fin de liste**. |
 | `list_tasks` | Lit les tâches d'un jour (`date`), d'une plage (`from` + `to`, 62 jours max) ou du backlog (`backlog: true`). Limité à 200 : `truncated` vaut `true` s'il y en a plus. |
 | `list_today_tasks` | Tâches d'aujourd'hui avec avancement et nom du projet. |
 | `update_day_task` | Modifie une tâche (`id`) : seuls les champs fournis changent ; `date` / `backlog: true` la déplace (rangée en fin de liste) ; `null` efface impact, urgence, échéance, note, domaine, projet. |
@@ -99,8 +99,8 @@ curl -X POST https://mcp.109-176-198-7.sslip.io/mcp \
 Image multi-étapes Node 22-alpine, utilisateur non-root, `HEALTHCHECK` sur `/health`.
 
 ```bash
-docker build -t agenticfocus-mcp:0.6.0 .
-docker run --rm -p 3000:3000 -e SUPABASE_URL=… -e SUPABASE_ANON_KEY=… -e SUPABASE_JWT_SECRET=… agenticfocus-mcp:0.6.0
+docker build -t agenticfocus-mcp:0.6.1 .
+docker run --rm -p 3000:3000 -e SUPABASE_URL=… -e SUPABASE_ANON_KEY=… -e SUPABASE_JWT_SECRET=… agenticfocus-mcp:0.6.1
 ```
 
 **Production** : VPS Hostinger, `https://mcp.109-176-198-7.sslip.io`, Traefik en reverse proxy. **Ne pas redéployer depuis `docker-compose.yml` / `deploy/docker-compose.prod.yml` du dépôt sans vérifier le tag d'image** : l'image `ghcr.io/…:0.3.0-jwt` référencée par d'anciens fichiers ne contient pas la vérification ES256. La procédure pas à pas (construction de l'image sur le VPS, annulation) est dans la Story 27-9.

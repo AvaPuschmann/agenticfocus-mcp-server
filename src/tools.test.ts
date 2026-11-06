@@ -51,7 +51,7 @@ describe("fuseau et dates", () => {
 describe("create_day_task", () => {
   it("crée la tâche d'aujourd'hui (fuseau de l'utilisateur) en première position, avec les valeurs par défaut", async () => {
     const out = await call("create_day_task", { name: "  Écrire le rapport  " });
-    expect(out).toMatchObject({ success: true, date: "2026-11-06", position: 1, planned_pomodoros: 1, story_points: 1 });
+    expect(out).toMatchObject({ success: true, date: "2026-11-06", position: 1, planned_pomodoros: 1, story_points: 0 });
     const row = store.tables.day_tasks[0];
     expect(row).toMatchObject({
       user_id: ME, name: "Écrire le rapport", date: "2026-11-06", is_completed: false, completed_pomodoros: 0,
@@ -83,6 +83,16 @@ describe("create_day_task", () => {
     });
   });
 
+  it("accepte les mêmes valeurs que l'application : 0 point, 50 points, 0 pomodoro (le 50 de la capture de Philippe)", async () => {
+    await call("create_day_task", { name: "Zéro", story_points: 0, planned_pomodoros: 0 });
+    await call("create_day_task", { name: "Cinquante", story_points: 50 });
+    await call("create_day_task", { name: "Maximum", story_points: 999 });
+    const rows = store.tables.day_tasks;
+    expect(rows.find((r) => r.name === "Zéro")).toMatchObject({ story_points: 0, planned_pomodoros: 0 });
+    expect(rows.find((r) => r.name === "Cinquante")).toMatchObject({ story_points: 50, planned_pomodoros: 1 });
+    expect(rows.find((r) => r.name === "Maximum")).toMatchObject({ story_points: 999 });
+  });
+
   it("user_id vient du jeton : l'agent ne peut pas le fournir (argument inconnu), et aucune écriture n'a lieu", async () => {
     const err = await rejected("create_day_task", { name: "x", user_id: OTHER });
     expect(err).toBeInstanceOf(ToolInputError);
@@ -98,9 +108,11 @@ describe("create_day_task", () => {
     ["date impossible", { name: "x", date: "2026-02-30" }, "date réelle"],
     ["date mal formée", { name: "x", date: "06/11/2026" }, "AAAA-MM-JJ"],
     ["date ET backlog", { name: "x", date: "2026-11-06", backlog: true }, "pas les deux"],
-    ["pomodoros hors bornes", { name: "x", planned_pomodoros: 0 }, "entre 1 et 99"],
+    ["pomodoros hors bornes", { name: "x", planned_pomodoros: 100 }, "entre 0 et 99"],
+    ["pomodoros négatifs", { name: "x", planned_pomodoros: -1 }, "entre 0 et 99"],
     ["pomodoros décimaux", { name: "x", planned_pomodoros: 1.5 }, "entier"],
-    ["points hors bornes", { name: "x", story_points: 22 }, "entre 1 et 21"],
+    ["points hors bornes", { name: "x", story_points: 1000 }, "entre 0 et 999"],
+    ["points négatifs", { name: "x", story_points: -1 }, "entre 0 et 999"],
     ["impact invalide", { name: "x", impact: "medium" }, "high, low"],
     ["urgence invalide", { name: "x", urgency: "maybe" }, "urgent, not_urgent"],
     ["note trop longue", { name: "x", note: "n".repeat(5001) }, "trop long"],
@@ -225,6 +237,19 @@ describe("update_day_task", () => {
     expect(out.updated.sort()).toEqual(["name", "story_points"]);
     expect(row(T1)).toMatchObject({ name: "Renommée", story_points: 8, note: "ancienne", impact: "low", date: "2026-11-06", position: 2 });
     expect(row(T1).updated_at).toBe(NOW.getTime());
+  });
+
+  it("accepte 50 points puis 0 point en modification (comme l'éditeur de tâche de l'application)", async () => {
+    await call("update_day_task", { id: T1, story_points: 50, planned_pomodoros: 4 });
+    expect(row(T1)).toMatchObject({ story_points: 50, planned_pomodoros: 4 });
+    await call("update_day_task", { id: T1, story_points: 0, planned_pomodoros: 0 });
+    expect(row(T1)).toMatchObject({ story_points: 0, planned_pomodoros: 0 });
+  });
+
+  it("refuse les points et pomodoros hors bornes en modification", async () => {
+    expect((await rejected("update_day_task", { id: T1, story_points: 1000 }))!.message).toContain("entre 0 et 999");
+    expect((await rejected("update_day_task", { id: T1, planned_pomodoros: 100 }))!.message).toContain("entre 0 et 99");
+    expect(store.writes("day_tasks")).toHaveLength(0);
   });
 
   it("null efface un champ (note, impact…)", async () => {
