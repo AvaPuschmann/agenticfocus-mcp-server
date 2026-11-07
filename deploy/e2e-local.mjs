@@ -48,9 +48,15 @@ const sb = second.sb;
 const userId = second.userId;
 check(first.token !== second.token, "deux jetons valides distincts pour le même utilisateur", "les deux jetons sont identiques (test non probant)");
 
+// Bibliothèque (27-12) : on ne supprime QUE les lignes créées par ce test (domaines / activités éventuels du compte B conservés).
+const E2E_PREFIX = "E2E bibliothèque";
 const cleanup = async () => {
   await sb.from("day_tasks").delete().eq("user_id", userId);
   await sb.from("projects").delete().eq("user_id", userId);
+  const { data: doms } = await sb.from("domains").select("id").eq("user_id", userId).like("name", E2E_PREFIX + "%");
+  const ids = (doms ?? []).map((d) => d.id);
+  if (ids.length) await sb.from("task_templates").delete().eq("user_id", userId).in("domain_id", ids);
+  if (ids.length) await sb.from("domains").delete().eq("user_id", userId).in("id", ids);
 };
 await cleanup();
 
@@ -99,7 +105,7 @@ try {
 
   const tools = await rpc(second.token, { jsonrpc: "2.0", id: 2, method: "tools/list" }, sid);
   const names = (tools.json?.result?.tools ?? []).map((t) => t.name).sort();
-  check(names.length === 11 && !names.some((n) => /delete|remove/i.test(n)), `11 outils, aucun outil de suppression (${names.join(", ")})`, `outils inattendus : ${names.join(", ")}`);
+  check(names.length === 16 && !names.some((n) => /delete|remove/i.test(n)), `16 outils, aucun outil de suppression (${names.join(", ")})`, `outils inattendus : ${names.join(", ")}`);
 
   console.log("\n2. Créer");
   const day = "2026-11-12";
@@ -189,6 +195,41 @@ try {
   const noDel = await tool("delete_project", { id: pr1.data?.id });
   check(noDel.isError && (await sb.from("projects").select("id").eq("user_id", userId)).data?.length === 3, "aucun outil de suppression de projet", "un projet a pu être supprimé");
   await tool("complete_day_task", { id: linked.data?.id }); // tâche liée : cochable, projet intact
+
+  console.log("\n5c. Bibliothèque : domaines et activités (Story 27-12)");
+  const before = (await sb.from("domains").select("id").eq("user_id", userId)).data?.length ?? 0;
+  const d1 = await tool("create_domain", { name: E2E_PREFIX + " A", color: "#9c27b0" });
+  check(d1.data?.success === true && d1.data.color === "#9C27B0", "domaine A créé (couleur normalisée)", `création domaine : ${d1.text}`);
+  const dRow = ((await sb.from("domains").select("*").eq("id", d1.data?.id)).data ?? [])[0];
+  check(dRow && dRow.user_id === userId && dRow.name === E2E_PREFIX + " A" && dRow.color === "#9C27B0" && typeof dRow.updated_at === "number",
+    "domaine A en base : bon utilisateur, nom, couleur, updated_at", `ligne : ${JSON.stringify(dRow)}`);
+  const dDup = await tool("create_domain", { name: (E2E_PREFIX + " a").toUpperCase() });
+  check(dDup.isError && /existe déjà/.test(dDup.text), "doublon de nom refusé (casse ignorée)", `doublon : ${dDup.text}`);
+  const d2 = await tool("create_domain", { name: E2E_PREFIX + " B" });
+  check(d2.data?.color === "#4CAF50", "domaine B : couleur par défaut", `défaut : ${d2.text}`);
+  const renamed = await tool("update_domain", { id: d1.data?.id, name: E2E_PREFIX + " A (renommé)", color: "#2196f3" });
+  const dRow2 = ((await sb.from("domains").select("*").eq("id", d1.data?.id)).data ?? [])[0];
+  check(renamed.data?.success === true && dRow2?.name === E2E_PREFIX + " A (renommé)" && dRow2?.color === "#2196F3" && dRow2.updated_at >= dRow.updated_at, "domaine A renommé et recoloré", `A : ${JSON.stringify(dRow2)}`);
+  const listD = await tool("list_domains");
+  check(listD.data?.count === before + 2 && listD.data.domains.some((d) => d.id === d1.data?.id), "list_domains voit les 2 nouveaux domaines", `list_domains : ${listD.data?.count} (avant ${before})`);
+
+  const act1 = await tool("create_activity", { domain_id: d1.data?.id, title: "E2E activité 1", note: "modèle créé par l'agent", story_points: 3, default_pomodoros: 2 });
+  const act2 = await tool("create_activity", { domain_id: d1.data?.id, title: "E2E activité 2" });
+  check(act1.data?.success === true && act2.data?.story_points === 1 && act2.data?.default_pomodoros === 1, "activités créées (défauts 1 / 1)", `activités : ${act1.text} / ${act2.text}`);
+  const aRow = ((await sb.from("task_templates").select("*").eq("id", act1.data?.id)).data ?? [])[0];
+  check(aRow && aRow.user_id === userId && aRow.domain_id === d1.data?.id && aRow.title === "E2E activité 1" && aRow.note === "modèle créé par l'agent" && aRow.story_points === 3 && aRow.default_pomodoros === 2 && typeof aRow.updated_at === "number",
+    "activité 1 en base : bon utilisateur, domaine, titre, note, points, pomodoros", `ligne : ${JSON.stringify(aRow)}`);
+  const foreign = await tool("create_activity", { domain_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", title: "orpheline" });
+  check(foreign.isError && /domain_id inconnu/.test(foreign.text), "domaine inconnu refusé (pas d'activité orpheline)", `orpheline : ${foreign.text}`);
+
+  const listA = await tool("list_activities", { domain_id: d1.data?.id });
+  check(listA.data?.count === 2 && listA.data.activities[0].title === "E2E activité 1", "list_activities filtré par domaine : 2 activités triées", `list_activities : ${listA.text.slice(0, 160)}`);
+  const upA = await tool("update_activity", { id: act1.data?.id, title: "E2E activité 1 (modifiée)", note: null, story_points: 8, domain_id: d2.data?.id });
+  const aRow2 = ((await sb.from("task_templates").select("*").eq("id", act1.data?.id)).data ?? [])[0];
+  check(upA.data?.success === true && aRow2?.title === "E2E activité 1 (modifiée)" && aRow2?.note === null && aRow2?.story_points === 8 && aRow2?.default_pomodoros === 2 && aRow2?.domain_id === d2.data?.id,
+    "activité 1 modifiée et déplacée vers B (note effacée, pomodoros conservés)", `ligne : ${JSON.stringify(aRow2)}`);
+  const noDelLib = await tool("delete_domain", { id: d1.data?.id });
+  check(noDelLib.isError && (await sb.from("domains").select("id").eq("id", d1.data?.id)).data?.length === 1, "aucun outil de suppression de domaine", "un domaine a pu être supprimé");
 
   console.log("\n6. Garde-fous");
   const gone = await tool("update_day_task", { id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", name: "fantôme" });
