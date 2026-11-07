@@ -17,6 +17,9 @@ import { type ToolContext, todayIn, dueDateToMs, nowMs, fail, assertOwned } from
 import {
   createProject, updateProject, moveProject, archiveProject, PROJECT_TOOL_DEFINITIONS,
 } from "./projects.js";
+import {
+  createDomain, updateDomain, listActivities, createActivity, updateActivity, LIBRARY_TOOL_DEFINITIONS,
+} from "./library.js";
 
 export { ToolInputError, todayIn, dueDateToMs };
 export type { ToolContext };
@@ -267,6 +270,11 @@ const HANDLERS: Record<string, Handler> = {
   update_project: updateProject,
   move_project: moveProject,
   archive_project: archiveProject,
+  create_domain: createDomain,
+  update_domain: updateDomain,
+  list_activities: listActivities,
+  create_activity: createActivity,
+  update_activity: updateActivity,
 };
 
 export async function runTool(name: string, args: unknown, ctx: ToolContext): Promise<string> {
@@ -368,7 +376,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: "list_domains",
-    description: "Liste les domaines de vie (Sport, Pro…) avec leur identifiant, à utiliser dans create_day_task / update_day_task.",
+    description: "Liste les domaines de vie (Sport, Pro…) avec leur identifiant et leur couleur, à utiliser dans create_day_task / update_day_task / create_activity.",
     inputSchema: { type: "object", additionalProperties: false, properties: {} },
   },
   {
@@ -384,6 +392,7 @@ export const TOOL_DEFINITIONS = [
     },
   },
   ...PROJECT_TOOL_DEFINITIONS,
+  ...LIBRARY_TOOL_DEFINITIONS,
 ];
 
 export type { Args };
