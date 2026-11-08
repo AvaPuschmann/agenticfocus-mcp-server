@@ -15,7 +15,7 @@ import {
   AgentAuthError, isAgentToken, type AgentTokenStore, type RateLimiter, type Scope,
 } from "./agentTokens.js";
 
-export const SERVER_VERSION = "0.8.0";
+export const SERVER_VERSION = "0.9.0";
 
 /** Outils qui modifient des données : interdits à un jeton d'agent en lecture seule. */
 export const WRITE_TOOLS = new Set([
