@@ -62,6 +62,8 @@ const cleanup = async () => {
   const rids = (rts ?? []).map((r) => r.id);
   if (rids.length) await sb.from("routine_items").delete().eq("user_id", userId).in("routine_id", rids);
   if (rids.length) await sb.from("routines").delete().eq("user_id", userId).in("id", rids);
+  // Objectifs (27-14) : seuls ceux du test (texte « E2E objectif… ») sont supprimés.
+  await sb.from("goals").delete().eq("user_id", userId).like("text", "E2E objectif%");
 };
 await cleanup();
 
@@ -110,7 +112,7 @@ try {
 
   const tools = await rpc(second.token, { jsonrpc: "2.0", id: 2, method: "tools/list" }, sid);
   const names = (tools.json?.result?.tools ?? []).map((t) => t.name).sort();
-  check(names.length === 17 && !names.some((n) => /delete|remove/i.test(n)), `17 outils, aucun outil de suppression (${names.join(", ")})`, `outils inattendus : ${names.join(", ")}`);
+  check(names.length === 19 && !names.some((n) => /delete|remove/i.test(n)), `19 outils, aucun outil de suppression (${names.join(", ")})`, `outils inattendus : ${names.join(", ")}`);
 
   console.log("\n2. Créer");
   const day = "2026-11-12";
@@ -270,6 +272,45 @@ try {
   const noWrite = await tool("update_routine", { id: rMorning, name: "piraté" });
   const unchanged = ((await sb.from("routines").select("name").eq("id", rMorning)).data ?? [])[0];
   check(noWrite.isError && unchanged?.name === "E2E routine matin", "aucun outil d'écriture sur les routines", `outil d'écriture : ${noWrite.text}`);
+
+  console.log("\n5e. Objectifs : jour, semaine, mois (Story 27-14)");
+  const gDay = "2026-11-12"; // jeudi, semaine ISO 46
+  const goalRows = async () => (await sb.from("goals").select("*").eq("user_id", userId).like("text", "E2E objectif%")).data ?? [];
+  const gd = await tool("set_goal", { type: "day", date: gDay, text: "E2E objectif jour" });
+  const gw = await tool("set_goal", { type: "week", date: gDay, text: "E2E objectif semaine" });
+  const gm = await tool("set_goal", { type: "month", date: gDay, text: "E2E objectif mois", status: "achieved" });
+  check(gd.data?.created === true && gd.data.period_key === "2026-11-12" && gw.data?.period_key === "2026-W46" && gm.data?.period_key === "2026-11",
+    "3 objectifs créés : clés 2026-11-12, 2026-W46, 2026-11", `création : ${gd.text} / ${gw.text} / ${gm.text}`);
+  let g = await goalRows();
+  const gdRow = g.find((r) => r.id === gd.data?.id);
+  const gmRow = g.find((r) => r.id === gm.data?.id);
+  check(g.length === 3 && gdRow?.user_id === userId && gdRow.type === "day" && gdRow.period_key === "2026-11-12" && gdRow.text === "E2E objectif jour" && gdRow.is_completed === false && gdRow.is_missed === false && typeof gdRow.created_at === "number",
+    "objectif du jour en base : bon utilisateur, type, période, texte, à faire", `ligne : ${JSON.stringify(gdRow)}`);
+  check(gmRow?.is_completed === true && gmRow.is_missed === false, "objectif du mois créé « atteint » (1, 0)", `mois : ${JSON.stringify(gmRow)}`);
+
+  const gd2 = await tool("set_goal", { type: "day", date: gDay, text: "E2E objectif jour (modifié)" });
+  g = await goalRows();
+  check(gd2.data?.created === false && gd2.data.id === gd.data?.id && g.filter((r) => r.type === "day").length === 1 && g.find((r) => r.id === gd.data?.id)?.text === "E2E objectif jour (modifié)",
+    "même période : modifié, aucun doublon", `doublon : ${gd2.text} / ${g.length} lignes`);
+  await tool("set_goal", { type: "day", date: gDay, status: "missed" });
+  const missed = (await goalRows()).find((r) => r.id === gd.data?.id);
+  check(missed?.is_completed === false && missed.is_missed === true && missed.text === "E2E objectif jour (modifié)", "statut raté (0, 1), texte conservé", `raté : ${JSON.stringify(missed)}`);
+  await tool("set_goal", { type: "day", date: gDay, status: "achieved" });
+  const achieved = (await goalRows()).find((r) => r.id === gd.data?.id);
+  check(achieved?.is_completed === true && achieved.is_missed === false, "statut atteint (1, 0) : le « raté » est bien réinitialisé", `atteint : ${JSON.stringify(achieved)}`);
+  await tool("set_goal", { type: "day", date: gDay, status: "todo" });
+  const todo = (await goalRows()).find((r) => r.id === gd.data?.id);
+  check(todo?.is_completed === false && todo.is_missed === false, "statut à faire (0, 0)", `à faire : ${JSON.stringify(todo)}`);
+
+  const lg = await tool("list_goals", { date: gDay });
+  check(lg.data?.period_keys?.week === "2026-W46" && lg.data.goals.day?.text === "E2E objectif jour (modifié)" && lg.data.goals.week?.text === "E2E objectif semaine" && lg.data.goals.month?.status === "achieved",
+    "list_goals d'une date : jour, semaine et mois avec leurs statuts", `list_goals : ${lg.text.slice(0, 220)}`);
+  const hist = await tool("list_goals", { type: "month", limit: 5 });
+  check(hist.data?.goals?.some((x) => x.period_key === "2026-11" && x.text === "E2E objectif mois"), "historique des mois contient l'objectif", `historique : ${hist.text.slice(0, 160)}`);
+  const none = await tool("set_goal", { type: "week", date: "2026-03-04" });
+  check(none.isError && /text/.test(none.text), "création sans texte refusée", `sans texte : ${none.text}`);
+  const noDelGoal = await tool("delete_goal", { id: gd.data?.id });
+  check(noDelGoal.isError && (await goalRows()).length === 3, "aucun outil de suppression d'objectif", "un objectif a pu être supprimé");
 
   console.log("\n6. Garde-fous");
   const gone = await tool("update_day_task", { id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", name: "fantôme" });

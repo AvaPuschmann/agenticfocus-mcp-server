@@ -21,6 +21,7 @@ import {
   createDomain, updateDomain, listActivities, createActivity, updateActivity, LIBRARY_TOOL_DEFINITIONS,
 } from "./library.js";
 import { listRoutines, ROUTINE_TOOL_DEFINITIONS } from "./routines.js";
+import { listGoals, setGoal, GOAL_TOOL_DEFINITIONS } from "./goals.js";
 
 export { ToolInputError, todayIn, dueDateToMs };
 export type { ToolContext };
@@ -277,6 +278,8 @@ const HANDLERS: Record<string, Handler> = {
   create_activity: createActivity,
   update_activity: updateActivity,
   list_routines: listRoutines,
+  list_goals: listGoals,
+  set_goal: setGoal,
 };
 
 export async function runTool(name: string, args: unknown, ctx: ToolContext): Promise<string> {
@@ -396,6 +399,7 @@ export const TOOL_DEFINITIONS = [
   ...PROJECT_TOOL_DEFINITIONS,
   ...LIBRARY_TOOL_DEFINITIONS,
   ...ROUTINE_TOOL_DEFINITIONS,
+  ...GOAL_TOOL_DEFINITIONS,
 ];
 
 export type { Args };
