@@ -1,6 +1,6 @@
 # AgenticFocus MCP Server
 
-Serveur MCP (Model Context Protocol) qui permet à un agent (Claude, Hermes…) de **lire et d'ajouter des tâches** dans AgenticFocus, avec les droits de l'utilisateur. Version **0.9.0** (Epics 25 et 27).
+Serveur MCP (Model Context Protocol) qui permet à un agent (Claude, Hermes…) de **lire et d'ajouter des tâches** dans AgenticFocus, avec les droits de l'utilisateur. Version **0.10.0** (Epics 25 et 27).
 
 - **Transport HTTP** (production, multi-utilisateur) : `POST/GET/DELETE /mcp`, `GET /health`.
 - **Transport stdio** (Claude Desktop en local, un seul utilisateur, hérité du POC).
@@ -13,7 +13,7 @@ Agent ──Bearer <jeton Supabase de l'utilisateur>──►  MCP  ──même 
 
 L'agent s'authentifie **comme l'utilisateur** (sa session Supabase). Le serveur vérifie le jeton, puis parle à Supabase avec ce jeton : les règles d'accès (RLS) s'appliquent, l'agent ne voit que les données de l'utilisateur. La clé `service_role` n'est **jamais** utilisée.
 
-## Outils (17)
+## Outils (19)
 
 | Outil | Rôle |
 |---|---|
@@ -34,8 +34,12 @@ L'agent s'authentifie **comme l'utilisateur** (sa session Supabase). Le serveur 
 | `create_activity` | Ajoute une activité à un domaine : `domain_id`, `title` (1-200), `note`, `story_points` (0-999, défaut 1), `default_pomodoros` (0-99, défaut 1). |
 | `update_activity` | Modifie une activité (`id`) : titre, note (`null` l'efface), points, pomodoros par défaut, `domain_id` (la déplace vers un autre domaine). |
 | `list_routines` | **Lecture seule.** Routines du matin et du soir avec leurs éléments dans l'ordre : heure de déclenchement, active ou non, série en cours, et pour chaque élément titre, domaine, points, pomodoros (surcharge, sinon valeur par défaut de l'activité) et indicateur « case à cocher ». Filtres : `type` (`morning` / `evening`), `include_inactive` (défaut `true`). Limité à 1 000 éléments : `truncated`. |
+| `list_goals` | Objectifs : par défaut ceux du **jour, de la semaine (ISO) et du mois** d'une `date` (défaut aujourd'hui), `null` si la période n'a pas d'objectif ; avec `type` (`day` / `week` / `month`) : l'historique, période la plus récente d'abord (`limit` 1-100, défaut 30). Statut : `todo`, `achieved`, `missed`. |
+| `set_goal` | Crée ou modifie l'objectif d'une période (`type`, `date` qui désigne la période, `text` 1-500, `status`). **Un seul objectif par période** : jamais de doublon. Texte obligatoire à la création ; ensuite texte et/ou statut. |
 
 **Bibliothèque** : une « activité » est un modèle de tâche (table `task_templates`) rattaché à un domaine. Seules les colonnes synchronisées avec Supabase sont gérées (domaine : nom, couleur ; activité : titre, note, points, pomodoros) ; tags, impact, urgence et échéance d'une activité restent locaux à l'application desktop.
+
+**Objectifs** : clés de période identiques au desktop et à Android (jour `AAAA-MM-JJ`, semaine ISO `AAAA-Wnn`, mois `AAAA-MM`) ; statut tri-état (à faire, atteint, raté), jamais « atteint » et « raté » à la fois ; un objectif ne se supprime pas (son texte se modifie).
 
 **Garde-fous (décision du 2026-11-05)** : **aucun outil ne supprime** ; les arguments sont validés strictement (un argument inconnu, comme `user_id` ou `title`, est une erreur) ; `user_id` vient toujours du jeton ; une tâche d'un autre utilisateur est « introuvable » (aucune fuite) ; « aujourd'hui » suit le fuseau de l'utilisateur.
 
@@ -111,7 +115,7 @@ curl -X POST https://mcp.109-176-198-7.sslip.io/mcp \
 Image multi-étapes Node 22-alpine, utilisateur non-root, `HEALTHCHECK` sur `/health`.
 
 ```bash
-docker build -t agenticfocus-mcp:0.9.0 .
+docker build -t agenticfocus-mcp:0.10.0 .
 docker run --rm -p 3000:3000 -e SUPABASE_URL=… -e SUPABASE_ANON_KEY=… -e SUPABASE_JWT_SECRET=… agenticfocus-mcp:0.6.1
 ```
 

@@ -120,7 +120,7 @@ try {
   const w = await open(write);
   check(w.status === 200, "session ouverte avec le jeton en écriture", `ouverture refusée : ${w.status}`);
   const names = await tools(write, w.sid);
-  check(names.length === 17, `jeton en écriture : 17 outils`, `outils : ${names.join(",")}`);
+  check(names.length === 19, `jeton en écriture : 19 outils`, `outils : ${names.join(",")}`);
   const created = await call(write, w.sid, "create_day_task", { name: "E2E jeton d'agent", backlog: true });
   check(created.data?.success === true, "tâche créée via le jeton d'agent", `création : ${created.text}`);
   const row = (await sb.from("day_tasks").select("*").eq("user_id", userId)).data?.[0];
@@ -128,7 +128,7 @@ try {
 
   const r = await open(read);
   const rnames = await tools(read, r.sid);
-  check(rnames.length === 6 && !rnames.some((n) => /create|update|complete/.test(n)), `jeton en lecture : ${rnames.join(", ")}`, `outils en lecture : ${rnames.join(",")}`);
+  check(rnames.length === 7 && !rnames.some((n) => /create|update|complete/.test(n)), `jeton en lecture : ${rnames.join(", ")}`, `outils en lecture : ${rnames.join(",")}`);
   const denied = await call(read, r.sid, "create_day_task", { name: "Interdit" });
   check(denied.isError && /lecture seule/.test(denied.text), "écriture refusée au jeton en lecture seule", `écriture non refusée : ${denied.text}`);
   const seen = await call(read, r.sid, "list_tasks", { backlog: true });
