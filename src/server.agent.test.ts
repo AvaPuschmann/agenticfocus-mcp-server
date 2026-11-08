@@ -16,8 +16,8 @@ import { AgentTokenStore, RateLimiter, SessionRevokedError, type RefreshedSessio
 const SECRET = "test-secret-very-long-string-do-not-use-in-prod-1234567890";
 const ME = "11111111-1111-4111-8111-111111111111";
 const OTHER = "22222222-2222-4222-8222-222222222222";
-const ALL_TOOLS = ["archive_project", "complete_day_task", "create_activity", "create_day_task", "create_domain", "create_project", "list_activities", "list_domains", "list_projects", "list_tasks", "list_today_tasks", "move_project", "update_activity", "update_day_task", "update_domain", "update_project"];
-const READ_TOOLS = ["list_activities", "list_domains", "list_projects", "list_tasks", "list_today_tasks"];
+const ALL_TOOLS = ["archive_project", "complete_day_task", "create_activity", "create_day_task", "create_domain", "create_project", "list_activities", "list_domains", "list_projects", "list_routines", "list_tasks", "list_today_tasks", "move_project", "update_activity", "update_day_task", "update_domain", "update_project"];
+const READ_TOOLS = ["list_activities", "list_domains", "list_projects", "list_routines", "list_tasks", "list_today_tasks"];
 
 const supa = createFakeStore();
 
@@ -128,7 +128,7 @@ describe("jetons d'agent — activés", () => {
     expect(read.json.result.isError).toBeUndefined();
   });
 
-  it("jeton en écriture et jeton utilisateur : les 16 outils", async () => {
+  it("jeton en écriture et jeton utilisateur : les 17 outils", async () => {
     const { token } = await makeAgentToken("write");
     expect(await toolNames(token, await open(token))).toEqual(ALL_TOOLS);
     const jwt = await userJwt();

@@ -57,6 +57,11 @@ const cleanup = async () => {
   const ids = (doms ?? []).map((d) => d.id);
   if (ids.length) await sb.from("task_templates").delete().eq("user_id", userId).in("domain_id", ids);
   if (ids.length) await sb.from("domains").delete().eq("user_id", userId).in("id", ids);
+  // Routines (27-13) : lecture seule côté MCP, donc créées ici directement par le compte B ; seules celles du test sont supprimées.
+  const { data: rts } = await sb.from("routines").select("id").eq("user_id", userId).like("name", "E2E routine%");
+  const rids = (rts ?? []).map((r) => r.id);
+  if (rids.length) await sb.from("routine_items").delete().eq("user_id", userId).in("routine_id", rids);
+  if (rids.length) await sb.from("routines").delete().eq("user_id", userId).in("id", rids);
 };
 await cleanup();
 
@@ -105,7 +110,7 @@ try {
 
   const tools = await rpc(second.token, { jsonrpc: "2.0", id: 2, method: "tools/list" }, sid);
   const names = (tools.json?.result?.tools ?? []).map((t) => t.name).sort();
-  check(names.length === 16 && !names.some((n) => /delete|remove/i.test(n)), `16 outils, aucun outil de suppression (${names.join(", ")})`, `outils inattendus : ${names.join(", ")}`);
+  check(names.length === 17 && !names.some((n) => /delete|remove/i.test(n)), `17 outils, aucun outil de suppression (${names.join(", ")})`, `outils inattendus : ${names.join(", ")}`);
 
   console.log("\n2. Créer");
   const day = "2026-11-12";
@@ -230,6 +235,41 @@ try {
     "activité 1 modifiée et déplacée vers B (note effacée, pomodoros conservés)", `ligne : ${JSON.stringify(aRow2)}`);
   const noDelLib = await tool("delete_domain", { id: d1.data?.id });
   check(noDelLib.isError && (await sb.from("domains").select("id").eq("id", d1.data?.id)).data?.length === 1, "aucun outil de suppression de domaine", "un domaine a pu être supprimé");
+
+  console.log("\n5d. Routines en lecture seule (Story 27-13)");
+  const nowMs = Date.now();
+  const rMorning = crypto.randomUUID();
+  const rEvening = crypto.randomUUID();
+  const rIns = await sb.from("routines").insert([
+    { id: rMorning, user_id: userId, type: "morning", name: "E2E routine matin", trigger_time: "06:45", is_active: true, streak_count: 3, streak_last_completed_date: "2026-11-07", last_injected_date: "2026-11-08", created_at: nowMs, updated_at: nowMs },
+    { id: rEvening, user_id: userId, type: "evening", name: "E2E routine soir", trigger_time: "21:30", is_active: false, streak_count: 0, streak_last_completed_date: null, last_injected_date: null, created_at: nowMs, updated_at: nowMs },
+  ]);
+  check(!rIns.error, "routines de test créées par le compte B (le MCP ne peut pas en écrire)", `création des routines : ${rIns.error?.message}`);
+  const itIns = await sb.from("routine_items").insert([
+    { id: crypto.randomUUID(), routine_id: rMorning, user_id: userId, template_id: act2.data?.id, snapshot_title: "E2E étape 2 (activité)", snapshot_domain_id: d1.data?.id, snapshot_story_points: 2, override_pomodoros: null, is_check_only: false, position: 1, created_at: nowMs, updated_at: nowMs },
+    { id: crypto.randomUUID(), routine_id: rMorning, user_id: userId, template_id: null, snapshot_title: "E2E étape 1 (case à cocher)", snapshot_domain_id: null, snapshot_story_points: 0, override_pomodoros: null, is_check_only: true, position: 0, created_at: nowMs, updated_at: nowMs },
+    { id: crypto.randomUUID(), routine_id: rEvening, user_id: userId, template_id: null, snapshot_title: "E2E bilan", snapshot_domain_id: null, snapshot_story_points: 1, override_pomodoros: 4, is_check_only: false, position: 0, created_at: nowMs, updated_at: nowMs },
+  ]);
+  check(!itIns.error, "éléments de routine de test créés", `création des éléments : ${itIns.error?.message}`);
+
+  const rAll = await tool("list_routines");
+  const mine = (rAll.data?.routines ?? []).filter((r) => r.name.startsWith("E2E routine"));
+  const rm = mine.find((r) => r.id === rMorning);
+  check(!rAll.isError && mine.length === 2 && rm?.type === "morning" && rm.trigger_time === "06:45" && rm.is_active === true && rm.streak_count === 3 && rm.last_injected_date === "2026-11-08" && rm.item_count === 2,
+    "list_routines : routines du test, avec heure, série et nombre d'éléments", `list_routines : ${rAll.text.slice(0, 200)}`);
+  check(rm?.items?.[0]?.title === "E2E étape 1 (case à cocher)" && rm.items[0].is_check_only === true && rm.items[1]?.title === "E2E étape 2 (activité)",
+    "éléments triés par position (case à cocher d'abord)", `éléments : ${JSON.stringify(rm?.items)}`);
+  check(rm?.items?.[1]?.domain_name === E2E_PREFIX + " A (renommé)" && rm.items[1].pomodoros === 1 && rm.items[1].override_pomodoros === null,
+    "élément lié : nom du domaine et pomodoros par défaut de l'activité (1)", `élément : ${JSON.stringify(rm?.items?.[1])}`);
+  const re = mine.find((r) => r.id === rEvening);
+  check(re?.items?.[0]?.override_pomodoros === 4 && re.items[0].pomodoros === 4, "surcharge de pomodoros (4) prioritaire", `soir : ${JSON.stringify(re)}`);
+  const onlyEvening = await tool("list_routines", { type: "evening" });
+  check(onlyEvening.data?.routines?.every((r) => r.type === "evening") && onlyEvening.data.routines.some((r) => r.id === rEvening), "filtre type: evening", `type : ${onlyEvening.text.slice(0, 160)}`);
+  const activeOnly = await tool("list_routines", { include_inactive: false });
+  check(activeOnly.data?.routines?.some((r) => r.id === rMorning) && !activeOnly.data.routines.some((r) => r.id === rEvening), "include_inactive: false masque la routine du soir", `actives : ${activeOnly.text.slice(0, 160)}`);
+  const noWrite = await tool("update_routine", { id: rMorning, name: "piraté" });
+  const unchanged = ((await sb.from("routines").select("name").eq("id", rMorning)).data ?? [])[0];
+  check(noWrite.isError && unchanged?.name === "E2E routine matin", "aucun outil d'écriture sur les routines", `outil d'écriture : ${noWrite.text}`);
 
   console.log("\n6. Garde-fous");
   const gone = await tool("update_day_task", { id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", name: "fantôme" });
